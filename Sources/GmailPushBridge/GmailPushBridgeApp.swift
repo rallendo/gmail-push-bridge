@@ -15,9 +15,10 @@ final class SettingsWindowController {
 
         let contentView = SettingsView(coordinator: coordinator, settings: coordinator.settings)
         let hostingController = NSHostingController(rootView: contentView)
+        hostingController.preferredContentSize = NSSize(width: 640, height: 740)
 
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 720),
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 740),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
@@ -25,7 +26,14 @@ final class SettingsWindowController {
         win.title = "Gmail Push Bridge — Settings & Status"
         win.contentViewController = hostingController
         win.minSize = NSSize(width: 540, height: 500)
-        win.center()
+
+        let autosaveName = "GmailPushBridgeSettingsWindow"
+        let restored = win.setFrameUsingName(autosaveName)
+        if !restored || win.frame.height < 500 || win.frame.width < 540 {
+            win.setContentSize(NSSize(width: 640, height: 740))
+            win.center()
+        }
+        win.setFrameAutosaveName(autosaveName)
         win.isReleasedWhenClosed = false
 
         self.window = win

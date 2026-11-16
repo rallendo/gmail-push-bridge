@@ -31,7 +31,8 @@ struct SettingsView: View {
             }
             .padding(18)
         }
-        .frame(minWidth: 540, idealWidth: 620, maxWidth: .infinity)
+        .frame(minWidth: 540, idealWidth: 640, maxWidth: .infinity,
+               minHeight: 520, idealHeight: 740, maxHeight: .infinity)
         .onAppear {
             if let existing = KeychainStore.loadAppPassword(for: settings.gmailAddress) {
                 appPasswordInput = existing
