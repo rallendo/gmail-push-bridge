@@ -17,13 +17,14 @@ final class SettingsWindowController {
         let hostingController = NSHostingController(rootView: contentView)
 
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 580, height: 520),
-            styleMask: [.titled, .closable, .miniaturizable],
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 720),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         win.title = "Gmail Push Bridge — Settings & Status"
         win.contentViewController = hostingController
+        win.minSize = NSSize(width: 540, height: 500)
         win.center()
         win.isReleasedWhenClosed = false
 
@@ -57,6 +58,7 @@ struct GmailPushBridgeApp: App {
 
 struct MenuBarContentView: View {
     @ObservedObject var coordinator: BridgeCoordinator
+    @ObservedObject private var updateManager = UpdateManager.shared
 
     private static let timeFormatter: DateFormatter = {
         let df = DateFormatter()
@@ -100,6 +102,17 @@ struct MenuBarContentView: View {
             SettingsWindowController.shared.show(coordinator: coordinator)
         }
         .keyboardShortcut(",", modifiers: [.command])
+
+        if let update = updateManager.availableUpdate {
+            Button("⭐️ Update Available (\(update.tagName))…") {
+                SettingsWindowController.shared.show(coordinator: coordinator)
+            }
+        }
+
+        Button(updateManager.state.isChecking ? "Checking for Updates…" : "Check for Updates…") {
+            updateManager.checkForUpdates(isUserInitiated: true)
+        }
+        .disabled(updateManager.state.isChecking || updateManager.state.isDownloading)
 
         Divider()
 

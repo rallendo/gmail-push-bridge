@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     @ObservedObject var coordinator: BridgeCoordinator
     @ObservedObject var settings: AppSettings
+    @ObservedObject private var updateManager = UpdateManager.shared
 
     @State private var oauthClientSecretInput: String = ""
     @State private var appPasswordInput: String = ""
@@ -19,131 +20,18 @@ struct SettingsView: View {
     }()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            statusBanner
-
-            Form {
-                Section {
-                    Picker("Auth Mode", selection: $settings.authMethod) {
-                        ForEach(GmailAuthMethod.allCases) { method in
-                            Text(method.title).tag(method)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-
-                    if settings.authMethod == .oauth2 {
-                        oauthSectionContent
-                    } else {
-                        appPasswordSectionContent
-                    }
-                } header: {
-                    Text("Gmail Authentication (Stored in macOS Keychain)")
-                        .font(.headline)
-                }
-
-                Divider()
-
-                Section {
-                    HStack {
-                        TextField("Apple Mail Account Name", text: $settings.appleMailAccountName)
-                            .textFieldStyle(.roundedBorder)
-
-                        if !coordinator.detectedMailAccounts.isEmpty {
-                            Menu("Pick Account") {
-                                ForEach(coordinator.detectedMailAccounts, id: \.self) { name in
-                                    Button(name) {
-                                        settings.appleMailAccountName = name
-                                    }
-                                }
-                            }
-                            .fixedSize()
-                        }
-
-                        Button("Detect from Mail") {
-                            coordinator.refreshMailAccounts()
-                        }
-                    }
-
-                    Toggle("Fallback to checking all accounts if account name isn't found", isOn: $settings.checkAllAccountsFallback)
-                    Toggle("Also run 'synchronize' on account (syncs flags & folders)", isOn: $settings.runSynchronizeInAdditionToCheck)
-                } header: {
-                    Text("Apple Mail Target")
-                        .font(.headline)
-                }
-
-                Divider()
-
-                Section {
-                    HStack(spacing: 20) {
-                        Stepper(
-                            "Debounce: \(String(format: "%.1fs", settings.debounceSeconds))",
-                            value: $settings.debounceSeconds,
-                            in: 0.5...10.0,
-                            step: 0.5
-                        )
-
-                        Stepper(
-                            "IDLE Refresh: \(settings.idleRenewalMinutes) min",
-                            value: $settings.idleRenewalMinutes,
-                            in: 5...25,
-                            step: 1
-                        )
-                    }
-
-                    Toggle("Start automatically at login (LaunchAgent)", isOn: $launchAtLogin)
-                        .onChange(of: launchAtLogin) { newValue in
-                            do {
-                                try LaunchAgentManager.setEnabled(newValue)
-                                coordinator.appendLog(newValue ? "Enabled LaunchAgent at login." : "Disabled LaunchAgent at login.")
-                            } catch {
-                                coordinator.appendLog("Failed to update LaunchAgent: \(error.localizedDescription)")
-                            }
-                        }
-                } header: {
-                    Text("Timing & Startup")
-                        .font(.headline)
-                }
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 14) {
+                statusBanner
+                authGroupBox
+                appleMailSection
+                timingSection
+                updatesSection
+                activityLogSection
             }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text("Live Activity Log")
-                        .font(.headline)
-                    Spacer()
-                    Text("Total Pushes: \(coordinator.totalPushesTriggered)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 4) {
-                        ForEach(coordinator.activityLog) { entry in
-                            HStack(alignment: .top, spacing: 8) {
-                                Text(Self.timeFormatter.string(from: entry.timestamp))
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                Text(entry.message)
-                                    .font(.system(.caption, design: .monospaced))
-                                    .textSelection(.enabled)
-                            }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                }
-                .frame(height: 130)
-                .background(Color(nsColor: .textBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
-                )
-            }
+            .padding(18)
         }
-        .padding(20)
-        .frame(width: 600)
+        .frame(minWidth: 540, idealWidth: 620, maxWidth: .infinity)
         .onAppear {
             if let existing = KeychainStore.loadAppPassword(for: settings.gmailAddress) {
                 appPasswordInput = existing
@@ -156,103 +44,8 @@ struct SettingsView: View {
         }
     }
 
-    @ViewBuilder
-    private var oauthSectionContent: some View {
-        HStack {
-            TextField("OAuth Desktop Client ID (xxx.apps.googleusercontent.com)", text: $settings.oauthClientId)
-                .textFieldStyle(.roundedBorder)
-
-            Button("Import client_secret.json…") {
-                importGoogleClientSecretJSON()
-            }
-        }
-
-        HStack {
-            SecureField("OAuth Client Secret (from Desktop OAuth client)", text: $oauthClientSecretInput)
-                .textFieldStyle(.roundedBorder)
-
-            if let url = URL(string: "https://console.cloud.google.com/apis/credentials") {
-                Link("Google Cloud Credentials ↗", destination: url)
-                    .font(.caption)
-            }
-        }
-
-        HStack {
-            TextField("Gmail Address (auto-filled on sign-in)", text: $settings.gmailAddress)
-                .textFieldStyle(.roundedBorder)
-
-            if settings.hasOAuthTokens {
-                Text("OAuth Token Saved ✓")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-            }
-        }
-
-        HStack(spacing: 12) {
-            Button(coordinator.isSigningInWithGoogle ? "Waiting for Browser Sign-In…" : "Sign in with Google (Passkey / Browser)") {
-                startGoogleOAuthFlow()
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(coordinator.isSigningInWithGoogle)
-
-            if settings.hasOAuthTokens {
-                Button("Connect Now") {
-                    coordinator.startMonitoring()
-                }
-                Button("Sign Out") {
-                    coordinator.signOutOAuth()
-                    saveFeedback = "OAuth tokens removed."
-                }
-            }
-
-            Button("Test Apple Mail Trigger") {
-                coordinator.triggerManualFetch()
-            }
-
-            if let saveFeedback {
-                Text(saveFeedback)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var appPasswordSectionContent: some View {
-        TextField("Gmail Address (e.g. you@gmail.com)", text: $settings.gmailAddress)
-            .textFieldStyle(.roundedBorder)
-
-        HStack {
-            SecureField("16-char Google App Password", text: $appPasswordInput)
-                .textFieldStyle(.roundedBorder)
-
-            if let url = URL(string: "https://myaccount.google.com/apppasswords") {
-                Link("Get App Password ↗", destination: url)
-                    .font(.caption)
-            }
-        }
-
-        HStack(spacing: 12) {
-            Button("Save & Connect") {
-                saveAppPasswordAndConnect()
-            }
-            .buttonStyle(.borderedProminent)
-
-            Button("Test Apple Mail Trigger") {
-                coordinator.triggerManualFetch()
-            }
-
-            if let saveFeedback {
-                Text(saveFeedback)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
     private var statusBanner: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             Circle()
                 .fill(statusColor)
                 .frame(width: 10, height: 10)
@@ -275,9 +68,426 @@ struct SettingsView: View {
                 Button("Reconnect") { coordinator.reconnectNow() }
             }
         }
-        .padding(10)
-        .background(Color.secondary.opacity(0.1))
+        .padding(12)
+        .background(Color.secondary.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+        )
+    }
+
+    private var authGroupBox: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                Picker("Auth Mode", selection: $settings.authMethod) {
+                    Text("Google OAuth 2.0").tag(GmailAuthMethod.oauth2)
+                    Text("App Password").tag(GmailAuthMethod.appPassword)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                if settings.authMethod == .oauth2 {
+                    oauthSectionContent
+                } else {
+                    appPasswordSectionContent
+                }
+            }
+            .padding(.vertical, 4)
+        } label: {
+            Label("Gmail Authentication (Stored in Keychain)", systemImage: "key.fill")
+                .font(.headline)
+        }
+    }
+
+    @ViewBuilder
+    private var oauthSectionContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Google OAuth Desktop Client ID")
+                    .font(.subheadline.weight(.medium))
+                HStack(spacing: 8) {
+                    TextField("xxx.apps.googleusercontent.com", text: $settings.oauthClientId)
+                        .textFieldStyle(.roundedBorder)
+
+                    Button("Import client_secret.json…") {
+                        importGoogleClientSecretJSON()
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("OAuth Client Secret")
+                        .font(.subheadline.weight(.medium))
+                    Spacer()
+                    if let url = URL(string: "https://console.cloud.google.com/apis/credentials") {
+                        Link("Google Cloud Credentials ↗", destination: url)
+                            .font(.caption)
+                    }
+                }
+                SecureField("Desktop Client Secret (from Google Cloud Console)", text: $oauthClientSecretInput)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Gmail Address")
+                        .font(.subheadline.weight(.medium))
+                    Spacer()
+                    if settings.hasOAuthTokens {
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark.circle.fill")
+                            Text("OAuth Token Saved")
+                        }
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.green)
+                    }
+                }
+                TextField("you@gmail.com (auto-filled on sign-in)", text: $settings.gmailAddress)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 10) {
+                    Button(action: startGoogleOAuthFlow) {
+                        HStack(spacing: 6) {
+                            if coordinator.isSigningInWithGoogle {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text("Waiting for Sign-In…")
+                            } else {
+                                Image(systemName: "safari")
+                                Text("Sign in with Google (Browser)")
+                            }
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(coordinator.isSigningInWithGoogle)
+
+                    if settings.hasOAuthTokens {
+                        Button("Connect Now") {
+                            coordinator.startMonitoring()
+                        }
+                        Button("Sign Out") {
+                            coordinator.signOutOAuth()
+                            saveFeedback = "OAuth tokens removed."
+                        }
+                    }
+
+                    Button("Test Apple Mail Trigger") {
+                        coordinator.triggerManualFetch()
+                    }
+                }
+
+                if let saveFeedback {
+                    Text(saveFeedback)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var appPasswordSectionContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Gmail Address")
+                    .font(.subheadline.weight(.medium))
+                TextField("you@gmail.com", text: $settings.gmailAddress)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Google App Password")
+                        .font(.subheadline.weight(.medium))
+                    Spacer()
+                    if let url = URL(string: "https://myaccount.google.com/apppasswords") {
+                        Link("Get App Password ↗", destination: url)
+                            .font(.caption)
+                    }
+                }
+                SecureField("16-character Google App Password", text: $appPasswordInput)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 10) {
+                    Button("Save & Connect") {
+                        saveAppPasswordAndConnect()
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button("Test Apple Mail Trigger") {
+                        coordinator.triggerManualFetch()
+                    }
+                }
+
+                if let saveFeedback {
+                    Text(saveFeedback)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private var appleMailSection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Apple Mail Account Name")
+                        .font(.subheadline.weight(.medium))
+                    HStack(spacing: 8) {
+                        TextField("e.g. Google or Gmail", text: $settings.appleMailAccountName)
+                            .textFieldStyle(.roundedBorder)
+
+                        if !coordinator.detectedMailAccounts.isEmpty {
+                            Menu("Pick Account") {
+                                ForEach(coordinator.detectedMailAccounts, id: \.self) { name in
+                                    Button(name) {
+                                        settings.appleMailAccountName = name
+                                    }
+                                }
+                            }
+                            .fixedSize()
+                        }
+
+                        Button("Detect from Mail") {
+                            coordinator.refreshMailAccounts()
+                        }
+                    }
+                }
+
+                Toggle("Fallback to checking all accounts if account name isn't found", isOn: $settings.checkAllAccountsFallback)
+                Toggle("Also run 'synchronize' on account (syncs flags & folders)", isOn: $settings.runSynchronizeInAdditionToCheck)
+            }
+            .padding(.vertical, 4)
+        } label: {
+            Label("Apple Mail Target", systemImage: "envelope.fill")
+                .font(.headline)
+        }
+    }
+
+    private var timingSection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 24) {
+                    Stepper(
+                        "Debounce: \(String(format: "%.1fs", settings.debounceSeconds))",
+                        value: $settings.debounceSeconds,
+                        in: 0.5...10.0,
+                        step: 0.5
+                    )
+
+                    Stepper(
+                        "IDLE Refresh: \(settings.idleRenewalMinutes) min",
+                        value: $settings.idleRenewalMinutes,
+                        in: 5...25,
+                        step: 1
+                    )
+                }
+
+                Toggle("Start automatically at login (LaunchAgent)", isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { newValue in
+                        do {
+                            try LaunchAgentManager.setEnabled(newValue)
+                            coordinator.appendLog(newValue ? "Enabled LaunchAgent at login." : "Disabled LaunchAgent at login.")
+                        } catch {
+                            coordinator.appendLog("Failed to update LaunchAgent: \(error.localizedDescription)")
+                        }
+                    }
+            }
+            .padding(.vertical, 4)
+        } label: {
+            Label("Timing & Startup", systemImage: "clock.fill")
+                .font(.headline)
+        }
+    }
+
+    private var updatesSection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .center) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Gmail Push Bridge v\(updateManager.currentVersion) (Build \(updateManager.currentBuild))")
+                            .font(.subheadline.weight(.semibold))
+
+                        if let lastChecked = updateManager.lastCheckedDate {
+                            Text("Last checked: \(Self.timeFormatter.string(from: lastChecked))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("Not checked yet")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Spacer()
+
+                    if updateManager.state.isChecking {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Checking…")
+                                .font(.caption)
+                        }
+                    } else {
+                        Button("Check for Updates Now") {
+                            updateManager.checkForUpdates(isUserInitiated: true)
+                        }
+                        .disabled(updateManager.state.isDownloading)
+                    }
+                }
+
+                Toggle("Automatically check for updates daily", isOn: $settings.automaticallyCheckForUpdates)
+
+                if let update = updateManager.availableUpdate {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Label("Update Available: \(update.tagName)", systemImage: "sparkles")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(.blue)
+
+                            Spacer()
+
+                            if update.assetSize > 0 {
+                                Text(ByteCountFormatter.string(fromByteCount: Int64(update.assetSize), countStyle: .file))
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        if !update.notes.isEmpty {
+                            ScrollView(.vertical) {
+                                Text(update.notes)
+                                    .font(.caption)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .textSelection(.enabled)
+                            }
+                            .frame(maxHeight: 90)
+                            .padding(8)
+                            .background(Color(nsColor: .textBackgroundColor))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+                            )
+                        }
+
+                        if case .downloading(let progress) = updateManager.state {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ProgressView(value: progress, total: 1.0)
+                                HStack {
+                                    Text(updateManager.statusMessage ?? "Downloading…")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    Button("Cancel") {
+                                        updateManager.cancelDownload()
+                                    }
+                                    .buttonStyle(.plain)
+                                    .font(.caption2)
+                                    .foregroundStyle(.red)
+                                }
+                            }
+                        } else if case .installing = updateManager.state {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text("Installing update and relaunching…")
+                                    .font(.caption)
+                            }
+                        } else {
+                            HStack(spacing: 10) {
+                                Button("Download & Install Update") {
+                                    updateManager.downloadAndInstallUpdate(update)
+                                }
+                                .buttonStyle(.borderedProminent)
+
+                                Button("View on GitHub ↗") {
+                                    NSWorkspace.shared.open(update.htmlURL)
+                                }
+                            }
+                        }
+                    }
+                    .padding(10)
+                    .background(Color.blue.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.blue.opacity(0.25), lineWidth: 1)
+                    )
+                } else if case .failed(let err) = updateManager.state {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text(err)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+        } label: {
+            Label("Software Updates", systemImage: "arrow.triangle.2.circlepath.circle.fill")
+                .font(.headline)
+        }
+    }
+
+    private var activityLogSection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Spacer()
+                    Text("Total Pushes: \(coordinator.totalPushesTriggered)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 4) {
+                            ForEach(coordinator.activityLog) { entry in
+                                HStack(alignment: .top, spacing: 8) {
+                                    Text(Self.timeFormatter.string(from: entry.timestamp))
+                                        .font(.system(.caption, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                    Text(entry.message)
+                                        .font(.system(.caption, design: .monospaced))
+                                        .textSelection(.enabled)
+                                }
+                                .id(entry.id)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                    }
+                    .frame(height: 120)
+                    .background(Color(nsColor: .textBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                    )
+                    .onChange(of: coordinator.activityLog.count) { _ in
+                        if let last = coordinator.activityLog.last {
+                            withAnimation {
+                                proxy.scrollTo(last.id, anchor: .bottom)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+        } label: {
+            Label("Live Activity Log", systemImage: "terminal.fill")
+                .font(.headline)
+        }
     }
 
     private var statusColor: Color {

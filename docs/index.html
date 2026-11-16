@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gmail Push Bridge for Apple Mail (macOS)</title>
+  <meta name="description" content="A lightweight native macOS Menu Bar utility bringing instant Gmail push to Apple Mail via IMAP IDLE.">
+  <link rel="icon" type="image/png" href="logo-120.png">
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: #151d30;
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+      --accent: #3b82f6;
+      --accent-glow: rgba(59, 130, 246, 0.25);
+      --border: #22304d;
+      --card-highlight: #1e293b;
+      --success: #10b981;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc;
+        --card-bg: #ffffff;
+        --text: #0f172a;
+        --text-muted: #64748b;
+        --accent: #2563eb;
+        --accent-glow: rgba(37, 99, 235, 0.15);
+        --border: #e2e8f0;
+        --card-highlight: #f1f5f9;
+        --success: #059669;
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 0 1.25rem 5rem;
+    }
+    header {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 2.5rem 0 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+      text-decoration: none;
+      color: var(--text);
+      font-weight: 700;
+      font-size: 1.25rem;
+    }
+    .brand img {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+    }
+    nav a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.95rem;
+      margin-left: 1.25rem;
+      transition: color 0.15s;
+    }
+    nav a:hover, nav a.active {
+      color: var(--accent);
+    }
+    .hero {
+      max-width: 960px;
+      margin: 4rem auto 3rem;
+      text-align: center;
+    }
+    .badge {
+      display: inline-block;
+      background: var(--card-highlight);
+      color: var(--accent);
+      border: 1px solid var(--border);
+      padding: 0.35rem 0.85rem;
+      border-radius: 999px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-bottom: 1.5rem;
+    }
+    .hero h1 {
+      font-size: clamp(2.2rem, 5vw, 3.4rem);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+      margin-bottom: 1.25rem;
+    }
+    .hero p {
+      font-size: 1.2rem;
+      color: var(--text-muted);
+      max-width: 680px;
+      margin: 0 auto 2.25rem;
+    }
+    .cta-group {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.8rem 1.6rem;
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 1rem;
+      text-decoration: none;
+      transition: all 0.15s ease;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: #ffffff;
+      box-shadow: 0 4px 14px var(--accent-glow);
+    }
+    .btn-primary:hover {
+      opacity: 0.92;
+      transform: translateY(-1px);
+    }
+    .btn-secondary {
+      background: var(--card-bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover {
+      background: var(--card-highlight);
+    }
+    .grid {
+      max-width: 960px;
+      margin: 3.5rem auto;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.5rem;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1.75rem;
+    }
+    .card-icon {
+      font-size: 1.75rem;
+      margin-bottom: 0.75rem;
+      display: inline-block;
+    }
+    .card h3 {
+      font-size: 1.2rem;
+      margin-bottom: 0.5rem;
+      letter-spacing: -0.01em;
+    }
+    .card p {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      line-height: 1.55;
+    }
+    .privacy-banner {
+      max-width: 960px;
+      margin: 2rem auto;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 2rem;
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+    }
+    .privacy-banner img {
+      width: 64px;
+      height: 64px;
+      border-radius: 12px;
+    }
+    .privacy-banner h3 {
+      font-size: 1.2rem;
+      margin-bottom: 0.35rem;
+    }
+    .privacy-banner p {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+    }
+    footer {
+      max-width: 960px;
+      margin: 4rem auto 0;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1rem;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+    footer a {
+      color: var(--text-muted);
+      text-decoration: underline;
+    }
+    footer a:hover {
+      color: var(--accent);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <a href="index.html" class="brand">
+      <img src="logo-120.png" alt="Gmail Push Bridge Logo">
+      <span>Gmail Push Bridge</span>
+    </a>
+    <nav>
+      <a href="index.html" class="active">Overview</a>
+      <a href="privacy.html">Privacy Policy</a>
+      <a href="terms.html">Terms of Service</a>
+      <a href="https://github.com/rallendo/gmail-push-bridge" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+  </header>
+
+  <div class="hero">
+    <div class="badge">Native macOS Menu Bar Utility</div>
+    <h1>Instant Gmail Push for Apple Mail</h1>
+    <p>
+      Gmail Push Bridge maintains a persistent, low-power IMAP IDLE connection to Google, triggering Apple Mail the exact second a new email arrives in your inbox.
+    </p>
+    <div class="cta-group">
+      <a href="https://github.com/rallendo/gmail-push-bridge" class="btn btn-primary" target="_blank" rel="noopener">View on GitHub</a>
+      <a href="privacy.html" class="btn btn-secondary">Read Privacy Policy</a>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-icon">⚡️</div>
+      <h3>Real-Time IMAP IDLE</h3>
+      <p>Uses Apple's <code>Network.framework</code> over TLS with TCP keepalives to listen directly for new email events with near-zero battery and CPU footprint.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">🔒</div>
+      <h3>100% Local & Private</h3>
+      <p>No remote servers, no analytics, no intermediate proxies. Credentials and OAuth tokens are stored exclusively in your hardware-protected macOS Keychain.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">🔑</div>
+      <h3>Modern Authentication</h3>
+      <p>Supports Sign in with Google (OAuth 2.0 with PKCE and Touch ID / Passkeys via SASL XOAUTH2) as well as traditional Google App Passwords.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">🍎</div>
+      <h3>Seamless Apple Mail Integration</h3>
+      <p>Triggers Apple Mail via AppleScript in the background only when Mail is already running, avoiding unexpected window popups or interruptions.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">🌙</div>
+      <h3>Sleep & Wake Aware</h3>
+      <p>Automatically detects system sleep, wake events, and network transitions, instantly refreshing the IMAP socket upon reconnection.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">📖</div>
+      <h3>Open Source Transparency</h3>
+      <p>Licensed under the permissive MIT license. Completely open and auditable source code available on GitHub.</p>
+    </div>
+  </div>
+
+  <div class="privacy-banner">
+    <img src="logo-120.png" alt="Logo">
+    <div>
+      <h3>Strict Adherence to Google API User Data Policy</h3>
+      <p>
+        Gmail Push Bridge adheres to Google's Limited Use requirements. Your email content is never read, stored, transferred to third parties, or used for AI model training or advertising.
+        <a href="privacy.html">Learn more in our Privacy Policy &rarr;</a>
+      </p>
+    </div>
+  </div>
+
+  <footer>
+    <div>&copy; 2026 Rick Allendoerfer. Released under the MIT License.</div>
+    <div>
+      <a href="privacy.html">Privacy</a> &bull; 
+      <a href="terms.html">Terms</a> &bull; 
+      <a href="https://github.com/rallendo/gmail-push-bridge" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </footer>
+</body>
+</html>

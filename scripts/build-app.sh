@@ -61,4 +61,8 @@ EOF
 echo "==> Signing app bundle (ad-hoc)…"
 codesign --force --deep --sign - "$APP_BUNDLE"
 
+echo "==> Creating release archive (${APP_NAME}.zip)…"
+(cd "$PROJECT_DIR/dist" && rm -f "${APP_NAME}.zip" && /usr/bin/ditto -c -k --keepParent "${APP_NAME}.app" "${APP_NAME}.zip")
+
 echo "==> Done! App bundle created at: $APP_BUNDLE"
+echo "==> Release archive created at: $PROJECT_DIR/dist/${APP_NAME}.zip"

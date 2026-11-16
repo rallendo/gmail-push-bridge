@@ -32,6 +32,7 @@ final class AppSettings: ObservableObject {
         static let imapHost = "imapHost"
         static let imapPort = "imapPort"
         static let watchedMailbox = "watchedMailbox"
+        static let automaticallyCheckForUpdates = "automaticallyCheckForUpdates"
     }
 
     @Published var authMethod: GmailAuthMethod {
@@ -78,6 +79,17 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(watchedMailbox, forKey: Keys.watchedMailbox) }
     }
 
+    @Published var automaticallyCheckForUpdates: Bool {
+        didSet {
+            defaults.set(automaticallyCheckForUpdates, forKey: Keys.automaticallyCheckForUpdates)
+            if automaticallyCheckForUpdates {
+                UpdateManager.shared.startPeriodicChecks(settings: self)
+            } else {
+                UpdateManager.shared.stopPeriodicChecks()
+            }
+        }
+    }
+
     init() {
         if let rawMethod = defaults.string(forKey: Keys.authMethod),
            let parsed = GmailAuthMethod(rawValue: rawMethod) {
@@ -114,6 +126,12 @@ final class AppSettings: ObservableObject {
         let savedPort = defaults.integer(forKey: Keys.imapPort)
         self.imapPort = savedPort > 0 ? UInt16(savedPort) : 993
         self.watchedMailbox = defaults.string(forKey: Keys.watchedMailbox) ?? "INBOX"
+
+        if defaults.object(forKey: Keys.automaticallyCheckForUpdates) == nil {
+            self.automaticallyCheckForUpdates = true
+        } else {
+            self.automaticallyCheckForUpdates = defaults.bool(forKey: Keys.automaticallyCheckForUpdates)
+        }
     }
 
     func sanitizedAppPassword() -> String? {

@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy - Gmail Push Bridge</title>
+  <link rel="icon" type="image/png" href="logo-120.png">
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --text: #e2e8f0;
+      --text-muted: #94a3b8;
+      --accent: #3b82f6;
+      --border: #334155;
+      --card-highlight: #283548;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc;
+        --card-bg: #ffffff;
+        --text: #0f172a;
+        --text-muted: #64748b;
+        --accent: #2563eb;
+        --border: #e2e8f0;
+        --card-highlight: #f1f5f9;
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+      padding: 0 1.25rem 4rem;
+    }
+    header {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 2.5rem 0 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+      text-decoration: none;
+      color: var(--text);
+      font-weight: 700;
+      font-size: 1.25rem;
+    }
+    .brand img {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+    }
+    nav a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.95rem;
+      margin-left: 1.25rem;
+      transition: color 0.15s;
+    }
+    nav a:hover, nav a.active {
+      color: var(--accent);
+    }
+    main {
+      max-width: 800px;
+      margin: 2.5rem auto 0;
+      background: var(--card-bg);
+      padding: 2.5rem;
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+    }
+    h1 {
+      font-size: 2.1rem;
+      margin-bottom: 0.5rem;
+      letter-spacing: -0.02em;
+    }
+    .meta {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      margin-bottom: 2rem;
+      padding-bottom: 1.25rem;
+      border-bottom: 1px solid var(--border);
+    }
+    h2 {
+      font-size: 1.35rem;
+      margin: 2rem 0 0.85rem;
+      color: var(--text);
+      letter-spacing: -0.01em;
+    }
+    h3 {
+      font-size: 1.1rem;
+      margin: 1.25rem 0 0.5rem;
+    }
+    p, ul {
+      margin-bottom: 1.2rem;
+      color: var(--text);
+    }
+    ul {
+      padding-left: 1.5rem;
+    }
+    li {
+      margin-bottom: 0.5rem;
+    }
+    .callout {
+      background: var(--card-highlight);
+      border-left: 4px solid var(--accent);
+      padding: 1.25rem 1.5rem;
+      border-radius: 0 8px 8px 0;
+      margin: 1.5rem 0;
+    }
+    .callout strong {
+      color: var(--accent);
+      display: block;
+      margin-bottom: 0.35rem;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.9em;
+      background: var(--card-highlight);
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    a {
+      color: var(--accent);
+      text-decoration: underline;
+    }
+    footer {
+      max-width: 800px;
+      margin: 2.5rem auto 0;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <a href="index.html" class="brand">
+      <img src="logo-120.png" alt="Gmail Push Bridge Logo">
+      <span>Gmail Push Bridge</span>
+    </a>
+    <nav>
+      <a href="index.html">Overview</a>
+      <a href="privacy.html" class="active">Privacy Policy</a>
+      <a href="terms.html">Terms of Service</a>
+      <a href="https://github.com/rallendo/gmail-push-bridge" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+  </header>
+
+  <main>
+    <h1>Privacy Policy</h1>
+    <div class="meta">Effective Date: November 16, 2026 | Last Updated: November 16, 2026</div>
+
+    <p>This Privacy Policy explains how <strong>Gmail Push Bridge</strong> ("we", "our", or "the Application"), developed by Rick Allendoerfer, accesses, handles, and protects your information when you use our open-source macOS utility.</p>
+
+    <h2>1. 100% Local-First / Zero-Cloud Architecture</h2>
+    <p>Gmail Push Bridge is designed strictly to operate locally on your Apple Mac:</p>
+    <ul>
+      <li><strong>Direct IMAP Connection:</strong> The Application connects directly from your Mac to Google's official IMAP mail servers (<code>imap.gmail.com:993</code>) via TLS. We do not operate any intermediate servers, cloud relays, web services, or databases.</li>
+      <li><strong>Hardware Keychain Storage:</strong> OAuth tokens (access tokens, refresh tokens) and App Passwords are stored exclusively in your local macOS Keychain under access group <code>com.gmailpushbridge.app</code>. They never leave your device.</li>
+      <li><strong>Zero Tracking or Analytics:</strong> The Application does not contain any third-party tracking SDKs, analytics, crash-reporting telemetry, or advertising libraries.</li>
+    </ul>
+
+    <h2>2. Google User Data & OAuth Scopes</h2>
+    <p>When you choose to authenticate using <strong>Sign in with Google</strong> (OAuth 2.0 with PKCE), the Application requests the following scopes:</p>
+    <ul>
+      <li><code>https://mail.google.com/</code> (Restricted Scope: Full IMAP access) &mdash; <em>Required by Google's IMAP server to perform SASL <code>XOAUTH2</code> authentication and establish an IMAP <code>IDLE</code> connection to listen for real-time mailbox count notifications (<code>EXISTS</code>).</em></li>
+      <li><code>email</code> &mdash; <em>Used solely to retrieve your verified Gmail address to auto-populate the local configuration field.</em></li>
+    </ul>
+
+    <h3>Data Accessed vs. Data Read</h3>
+    <p>The Application only reads the count of messages in your <code>INBOX</code> to detect when a new email arrives. <strong>The Application never reads, collects, inspects, stores, or transmits the body, subject line, sender, or attachments of your emails.</strong> When a new email arrives, Gmail Push Bridge signals your local Apple Mail client (<code>Mail.app</code>) via AppleScript to perform its native fetch directly from Google.</p>
+
+    <div class="callout">
+      <strong>Google API Services User Data Policy Compliance</strong>
+      Gmail Push Bridge's use and transfer to any other app of information received from Google APIs will adhere to the <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">Google API Services User Data Policy</a>, including the <strong>Limited Use</strong> requirements.
+    </div>
+
+    <h2>3. Limited Use Requirements</h2>
+    <p>In accordance with Google's Limited Use requirements:</p>
+    <ul>
+      <li><strong>No External Transfer:</strong> We do not transfer, transmit, or disclose Google user data to any external parties or servers.</li>
+      <li><strong>No Advertising:</strong> User data is never used or transferred for serving advertisements, personalized marketing, or retargeting.</li>
+      <li><strong>No Human Inspection:</strong> No human, including the developer, has access to or reads your Google user data.</li>
+      <li><strong>No Model Training:</strong> Google user data is not used to train machine learning or artificial intelligence models.</li>
+    </ul>
+
+    <h2>4. Data Retention, Revocation, and Deletion</h2>
+    <p>Because all data resides exclusively on your local device:</p>
+    <ul>
+      <li>You can revoke the Application's access at any time through your Google Security settings at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">myaccount.google.com/permissions</a>.</li>
+      <li>Clicking <strong>Disconnect / Reset</strong> inside the Application immediately purges all OAuth tokens and credentials from your macOS Keychain.</li>
+      <li>Deleting the application removes all application binaries and configuration from your Mac.</li>
+    </ul>
+
+    <h2>5. Open Source Transparency</h2>
+    <p>The complete source code of Gmail Push Bridge is public and open-source under the MIT license. You can inspect the network requests, Keychain handling, and AppleScript triggers at <a href="https://github.com/rallendo/gmail-push-bridge" target="_blank" rel="noopener">https://github.com/rallendo/gmail-push-bridge</a>.</p>
+
+    <h2>6. Contact Us</h2>
+    <p>If you have questions regarding this Privacy Policy, please contact:</p>
+    <p>
+      <strong>Developer:</strong> Rick Allendoerfer<br>
+      <strong>Email:</strong> <a href="mailto:rick.allendoerfer@gmail.com">rick.allendoerfer@gmail.com</a><br>
+      <strong>GitHub:</strong> <a href="https://github.com/rallendo/gmail-push-bridge" target="_blank" rel="noopener">https://github.com/rallendo/gmail-push-bridge</a>
+    </p>
+  </main>
+
+  <footer>
+    &copy; 2026 Rick Allendoerfer. Open source under the MIT License.
+  </footer>
+</body>
+</html>

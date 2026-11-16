@@ -17,6 +17,7 @@ Supports both **Sign in with Google (OAuth 2.0 + PKCE / Passkey via `XOAUTH2`)**
 - **[SystemMonitor.swift](Sources/GmailPushBridge/SystemMonitor.swift)** — Listens to `NSWorkspace.didWakeNotification` and `NWPathMonitor` to immediately reconnect and fetch when your Mac wakes from sleep or changes Wi-Fi networks.
 - **[KeychainStore.swift](Sources/GmailPushBridge/KeychainStore.swift)** — Stores OAuth 2.0 refresh/access tokens and App Passwords securely in the macOS Keychain (`com.gmailpushbridge.app`).
 - **[LaunchAgentManager.swift](Sources/GmailPushBridge/LaunchAgentManager.swift)** — Optional one-click **Start at Login** toggle (`~/Library/LaunchAgents/com.gmailpushbridge.app.plist`).
+- **[UpdateManager.swift](Sources/GmailPushBridge/UpdateManager.swift)** — Automatic background update checker and seamless in-place updater powered by GitHub Releases. Downloads release archives, validates signatures, clears Gatekeeper quarantine, atomically swaps the `.app` bundle, and relaunches.
 
 ---
 

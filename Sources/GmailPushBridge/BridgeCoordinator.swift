@@ -10,6 +10,7 @@ struct LogEntry: Identifiable, Sendable {
 @MainActor
 final class BridgeCoordinator: ObservableObject {
     let settings = AppSettings()
+    let updateManager = UpdateManager.shared
 
     @Published private(set) var connectionState: IMAPConnectionState = .disconnected
     @Published private(set) var isPaused: Bool = false
@@ -27,6 +28,7 @@ final class BridgeCoordinator: ObservableObject {
 
     init() {
         setupClients()
+        updateManager.startPeriodicChecks(settings: settings)
         if settings.isConfigured {
             startMonitoring()
         } else {
