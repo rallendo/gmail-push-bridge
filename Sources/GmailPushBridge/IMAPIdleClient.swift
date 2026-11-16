@@ -45,11 +45,16 @@ enum IMAPConnectionState: Equatable, Sendable {
     }
 }
 
+enum IMAPCredentialMode: Sendable {
+    case appPassword(String)
+    case xoauth2(tokenProvider: @Sendable () async throws -> String)
+}
+
 struct IMAPConfiguration: Sendable {
     let host: String
     let port: UInt16
     let email: String
-    let appPassword: String
+    let credentialMode: IMAPCredentialMode
     let mailbox: String
     let idleRenewalMinutes: Int
 }
@@ -61,6 +66,7 @@ final class IMAPIdleClient: @unchecked Sendable {
     private enum ProtocolStep {
         case idle
         case awaitingGreeting
+        case preparingOAuth
         case loggingIn(tag: String)
         case selecting(tag: String)
         case enteringIdle(tag: String)
@@ -232,8 +238,7 @@ final class IMAPIdleClient: @unchecked Sendable {
             knownExistsCount = exists
             eventHandler(.inboxCountUpdated(exists))
 
-            if case .idling(let tag) = step {
-                _ = tag
+            if case .idling = step {
                 eventHandler(.stateChanged(.idling(mailbox: config.mailbox, existsCount: exists)))
                 if let previous, exists > previous {
                     eventHandler(.log("Gmail reported * \(exists) EXISTS (was \(previous)) -> New mail arrived!"))
@@ -262,19 +267,13 @@ final class IMAPIdleClient: @unchecked Sendable {
         }
 
         switch step {
-        case .idle:
+        case .idle, .preparingOAuth:
             break
 
         case .awaitingGreeting:
             if line.hasPrefix("* OK") {
                 cancelWatchdog()
-                let tag = nextTag()
-                step = .loggingIn(tag: tag)
-                eventHandler(.stateChanged(.authenticating))
-                let escapedUser = Self.escapeIMAPQuoted(config.email)
-                let escapedPass = Self.escapeIMAPQuoted(config.appPassword)
-                startWatchdog(seconds: 15, description: "LOGIN response")
-                sendRaw("\(tag) LOGIN \"\(escapedUser)\" \"\(escapedPass)\"\r\n", redactLogAs: "\(tag) LOGIN \"\(escapedUser)\" <redacted>")
+                beginAuthentication(using: config)
             } else if line.hasPrefix("* BYE") {
                 scheduleReconnect(reason: "Server sent BYE on greeting")
             }
@@ -289,11 +288,15 @@ final class IMAPIdleClient: @unchecked Sendable {
                 let escapedMailbox = Self.escapeIMAPQuoted(config.mailbox)
                 startWatchdog(seconds: 15, description: "SELECT \(config.mailbox)")
                 sendRaw("\(selectTag) SELECT \"\(escapedMailbox)\"\r\n")
+            } else if line.hasPrefix("+ ") || line == "+" {
+                // Gmail XOAUTH2 sends `+ <base64_error_json>` before `<tag> NO` when a token is rejected;
+                // RFC / Google XOAUTH2 requires sending an empty `\r\n` to complete the failed SASL exchange.
+                sendRaw("\r\n")
             } else if line.hasPrefix("\(tag) NO") || line.hasPrefix("\(tag) BAD") {
                 cancelWatchdog()
                 teardownConnection()
                 isStopped = true
-                let detail = "Check Gmail address & 16-char App Password (\(line))"
+                let detail = "Authentication rejected (\(line))"
                 eventHandler(.log("Authentication rejected: \(line)"))
                 eventHandler(.stateChanged(.authFailed(detail)))
             }
@@ -334,6 +337,49 @@ final class IMAPIdleClient: @unchecked Sendable {
             } else if line.hasPrefix("\(tag) NO") || line.hasPrefix("\(tag) BAD") || line.hasPrefix("* BYE") {
                 cancelWatchdog()
                 scheduleReconnect(reason: "Error exiting IDLE: \(line)")
+            }
+        }
+    }
+
+    private func beginAuthentication(using config: IMAPConfiguration) {
+        eventHandler(.stateChanged(.authenticating))
+        switch config.credentialMode {
+        case .appPassword(let password):
+            let tag = nextTag()
+            step = .loggingIn(tag: tag)
+            let escapedUser = Self.escapeIMAPQuoted(config.email)
+            let escapedPass = Self.escapeIMAPQuoted(password)
+            startWatchdog(seconds: 15, description: "LOGIN response")
+            sendRaw("\(tag) LOGIN \"\(escapedUser)\" \"\(escapedPass)\"\r\n", redactLogAs: "\(tag) LOGIN \"\(escapedUser)\" <redacted>")
+
+        case .xoauth2(let tokenProvider):
+            step = .preparingOAuth
+            startWatchdog(seconds: 20, description: "OAuth2 token refresh & XOAUTH2 login")
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    let accessToken = try await tokenProvider()
+                    self.queue.async { [weak self] in
+                        guard let self, !self.isStopped, case .preparingOAuth = self.step else { return }
+                        let tag = self.nextTag()
+                        self.step = .loggingIn(tag: tag)
+                        let sasl = GoogleOAuthManager.buildXOAuth2SASL(email: config.email, accessToken: accessToken)
+                        self.startWatchdog(seconds: 15, description: "AUTHENTICATE XOAUTH2 response")
+                        self.sendRaw(
+                            "\(tag) AUTHENTICATE XOAUTH2 \(sasl)\r\n",
+                            redactLogAs: "\(tag) AUTHENTICATE XOAUTH2 <oauth2-token-for-\(config.email)>"
+                        )
+                    }
+                } catch {
+                    self.queue.async { [weak self] in
+                        guard let self, !self.isStopped else { return }
+                        self.cancelWatchdog()
+                        self.teardownConnection()
+                        self.isStopped = true
+                        self.eventHandler(.log("OAuth2 token error: \(error.localizedDescription)"))
+                        self.eventHandler(.stateChanged(.authFailed(error.localizedDescription)))
+                    }
+                }
             }
         }
     }
@@ -421,7 +467,6 @@ final class IMAPIdleClient: @unchecked Sendable {
         reconnectWorkItem?.cancel()
 
         reconnectAttempt += 1
-        // Exponential backoff capped at 30 seconds: 2s, 4s, 8s, 16s, 30s
         let delay = min(30, Int(pow(2.0, Double(min(reconnectAttempt, 5)))))
         eventHandler(.stateChanged(.reconnecting(attempt: reconnectAttempt, delaySeconds: delay)))
         eventHandler(.log("Scheduling reconnect #\(reconnectAttempt) in \(delay)s (\(reason))"))
@@ -439,7 +484,6 @@ final class IMAPIdleClient: @unchecked Sendable {
         return String(format: "A%04d", tagCounter)
     }
 
-    /// Parses lines like `* 1420 EXISTS` or `* 5 EXPUNGE`.
     private static func parseUntaggedNumber(line: String, keyword: String) -> Int? {
         guard line.hasPrefix("* ") else { return nil }
         let parts = line.split(separator: " ")

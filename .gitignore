@@ -1,9 +1,3 @@
-# Swift Package Manager & Builds
-.build/
-.swiftpm/
-dist/
-DerivedData/
-
 # macOS
 .DS_Store
 .AppleDouble
@@ -12,14 +6,20 @@ DerivedData/
 .Spotlight-V100
 .Trashes
 
-# Sensitive files / Local overrides
+# Swift & Xcode
+.build/
+.swiftpm/
+dist/
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+
+# Local credentials & tokens
 *.env
 *.env.*
 *.keychain
 *.keychain-db
-
-# Editor configurations
-.idea/
-.vscode/
-*.swp
-*~
+client_secret*.json
+credentials*.json
+token*.json

@@ -13,6 +13,7 @@ final class BridgeCoordinator: ObservableObject {
 
     @Published private(set) var connectionState: IMAPConnectionState = .disconnected
     @Published private(set) var isPaused: Bool = false
+    @Published private(set) var isSigningInWithGoogle: Bool = false
     @Published private(set) var lastTriggerDate: Date?
     @Published private(set) var lastTriggerSummary: String = "No push triggered yet"
     @Published private(set) var totalPushesTriggered: Int = 0
@@ -29,7 +30,7 @@ final class BridgeCoordinator: ObservableObject {
         if settings.isConfigured {
             startMonitoring()
         } else {
-            appendLog("Welcome! Add your Gmail address and 16-char App Password above to start.")
+            appendLog("Welcome! Sign in with Google (OAuth 2.0 / Passkey) or add an App Password above.")
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 350_000_000)
                 guard let self else { return }
@@ -65,12 +66,59 @@ final class BridgeCoordinator: ObservableObject {
         systemMonitor?.start()
     }
 
+    func signInWithGoogle(clientSecret: String?) async throws {
+        isSigningInWithGoogle = true
+        defer { isSigningInWithGoogle = false }
+
+        appendLog("Opening browser for Google OAuth 2.0 sign-in (Passkey / Touch ID supported)…")
+        let result = try await GoogleOAuthManager.shared.signInWithBrowser(
+            clientId: settings.oauthClientId,
+            clientSecret: clientSecret,
+            loginHintEmail: settings.gmailAddress
+        )
+        settings.gmailAddress = result.email
+        settings.authMethod = .oauth2
+        appendLog("Signed in with Google as \(result.email). OAuth tokens stored in Keychain.")
+        startMonitoring()
+    }
+
+    func signOutOAuth() {
+        let email = settings.gmailAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        imapClient?.stop()
+        if !email.isEmpty {
+            KeychainStore.deleteOAuthTokens(for: email)
+        }
+        settings.objectWillChange.send()
+        appendLog("Removed stored OAuth tokens from Keychain.")
+    }
+
     func startMonitoring() {
         let email = settings.gmailAddress.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !email.isEmpty, let appPassword = settings.sanitizedAppPassword() else {
+        guard !email.isEmpty else {
             connectionState = .disconnected
-            appendLog("Cannot start: Gmail address or App Password missing.")
+            appendLog("Cannot start: Gmail address missing.")
             return
+        }
+
+        let credentialMode: IMAPCredentialMode
+        switch settings.authMethod {
+        case .oauth2:
+            guard settings.hasOAuthTokens else {
+                connectionState = .disconnected
+                appendLog("Click 'Sign in with Google' to authorize IMAP access.")
+                return
+            }
+            credentialMode = .xoauth2 {
+                try await GoogleOAuthManager.shared.validAccessToken(for: email)
+            }
+
+        case .appPassword:
+            guard let appPassword = settings.sanitizedAppPassword() else {
+                connectionState = .disconnected
+                appendLog("Cannot start: 16-character App Password missing.")
+                return
+            }
+            credentialMode = .appPassword(appPassword)
         }
 
         isPaused = false
@@ -78,7 +126,7 @@ final class BridgeCoordinator: ObservableObject {
             host: settings.imapHost,
             port: settings.imapPort,
             email: email,
-            appPassword: appPassword,
+            credentialMode: credentialMode,
             mailbox: settings.watchedMailbox,
             idleRenewalMinutes: settings.idleRenewalMinutes
         )

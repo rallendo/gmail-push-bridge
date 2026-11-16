@@ -1,10 +1,12 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @ObservedObject var coordinator: BridgeCoordinator
     @ObservedObject var settings: AppSettings
 
+    @State private var oauthClientSecretInput: String = ""
     @State private var appPasswordInput: String = ""
     @State private var saveFeedback: String?
     @State private var launchAtLogin: Bool = LaunchAgentManager.isEnabled
@@ -17,42 +19,25 @@ struct SettingsView: View {
     }()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 14) {
             statusBanner
 
             Form {
                 Section {
-                    TextField("Gmail Address (e.g. you@gmail.com)", text: $settings.gmailAddress)
-                        .textFieldStyle(.roundedBorder)
-
-                    HStack {
-                        SecureField("16-char Google App Password", text: $appPasswordInput)
-                            .textFieldStyle(.roundedBorder)
-
-                        if let url = URL(string: "https://myaccount.google.com/apppasswords") {
-                            Link("Get App Password ↗", destination: url)
-                                .font(.caption)
+                    Picker("Auth Mode", selection: $settings.authMethod) {
+                        ForEach(GmailAuthMethod.allCases) { method in
+                            Text(method.title).tag(method)
                         }
                     }
+                    .pickerStyle(.segmented)
 
-                    HStack(spacing: 12) {
-                        Button("Save & Connect") {
-                            saveCredentialsAndConnect()
-                        }
-                        .buttonStyle(.borderedProminent)
-
-                        Button("Test Apple Mail Trigger") {
-                            coordinator.triggerManualFetch()
-                        }
-
-                        if let saveFeedback {
-                            Text(saveFeedback)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                    if settings.authMethod == .oauth2 {
+                        oauthSectionContent
+                    } else {
+                        appPasswordSectionContent
                     }
                 } header: {
-                    Text("Gmail IMAP IDLE Credentials (Stored in macOS Keychain)")
+                    Text("Gmail Authentication (Stored in macOS Keychain)")
                         .font(.headline)
                 }
 
@@ -148,7 +133,7 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
                 }
-                .frame(height: 140)
+                .frame(height: 130)
                 .background(Color(nsColor: .textBackgroundColor))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .overlay(
@@ -158,12 +143,111 @@ struct SettingsView: View {
             }
         }
         .padding(20)
-        .frame(width: 580)
+        .frame(width: 600)
         .onAppear {
             if let existing = KeychainStore.loadAppPassword(for: settings.gmailAddress) {
                 appPasswordInput = existing
             }
+            if let tokens = KeychainStore.loadOAuthTokens(for: settings.gmailAddress),
+               let secret = tokens.clientSecret {
+                oauthClientSecretInput = secret
+            }
             launchAtLogin = LaunchAgentManager.isEnabled
+        }
+    }
+
+    @ViewBuilder
+    private var oauthSectionContent: some View {
+        HStack {
+            TextField("OAuth Desktop Client ID (xxx.apps.googleusercontent.com)", text: $settings.oauthClientId)
+                .textFieldStyle(.roundedBorder)
+
+            Button("Import client_secret.json…") {
+                importGoogleClientSecretJSON()
+            }
+        }
+
+        HStack {
+            SecureField("OAuth Client Secret (from Desktop OAuth client)", text: $oauthClientSecretInput)
+                .textFieldStyle(.roundedBorder)
+
+            if let url = URL(string: "https://console.cloud.google.com/apis/credentials") {
+                Link("Google Cloud Credentials ↗", destination: url)
+                    .font(.caption)
+            }
+        }
+
+        HStack {
+            TextField("Gmail Address (auto-filled on sign-in)", text: $settings.gmailAddress)
+                .textFieldStyle(.roundedBorder)
+
+            if settings.hasOAuthTokens {
+                Text("OAuth Token Saved ✓")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            }
+        }
+
+        HStack(spacing: 12) {
+            Button(coordinator.isSigningInWithGoogle ? "Waiting for Browser Sign-In…" : "Sign in with Google (Passkey / Browser)") {
+                startGoogleOAuthFlow()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(coordinator.isSigningInWithGoogle)
+
+            if settings.hasOAuthTokens {
+                Button("Connect Now") {
+                    coordinator.startMonitoring()
+                }
+                Button("Sign Out") {
+                    coordinator.signOutOAuth()
+                    saveFeedback = "OAuth tokens removed."
+                }
+            }
+
+            Button("Test Apple Mail Trigger") {
+                coordinator.triggerManualFetch()
+            }
+
+            if let saveFeedback {
+                Text(saveFeedback)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var appPasswordSectionContent: some View {
+        TextField("Gmail Address (e.g. you@gmail.com)", text: $settings.gmailAddress)
+            .textFieldStyle(.roundedBorder)
+
+        HStack {
+            SecureField("16-char Google App Password", text: $appPasswordInput)
+                .textFieldStyle(.roundedBorder)
+
+            if let url = URL(string: "https://myaccount.google.com/apppasswords") {
+                Link("Get App Password ↗", destination: url)
+                    .font(.caption)
+            }
+        }
+
+        HStack(spacing: 12) {
+            Button("Save & Connect") {
+                saveAppPasswordAndConnect()
+            }
+            .buttonStyle(.borderedProminent)
+
+            Button("Test Apple Mail Trigger") {
+                coordinator.triggerManualFetch()
+            }
+
+            if let saveFeedback {
+                Text(saveFeedback)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -210,7 +294,56 @@ struct SettingsView: View {
         }
     }
 
-    private func saveCredentialsAndConnect() {
+    private func startGoogleOAuthFlow() {
+        saveFeedback = nil
+        Task {
+            do {
+                try await coordinator.signInWithGoogle(clientSecret: oauthClientSecretInput)
+                saveFeedback = "Signed in as \(settings.gmailAddress) ✓"
+            } catch {
+                saveFeedback = error.localizedDescription
+                coordinator.appendLog("Google OAuth sign-in error: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func importGoogleClientSecretJSON() {
+        let panel = NSOpenPanel()
+        panel.title = "Select Google OAuth Desktop client_secret.json"
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        struct GoogleCredentialsFile: Decodable {
+            struct ClientInfo: Decodable {
+                let client_id: String
+                let client_secret: String?
+            }
+            let installed: ClientInfo?
+            let web: ClientInfo?
+        }
+
+        do {
+            let data = try Data(contentsOf: url)
+            let parsed = try JSONDecoder().decode(GoogleCredentialsFile.self, from: data)
+            if let info = parsed.installed ?? parsed.web {
+                settings.oauthClientId = info.client_id
+                if let secret = info.client_secret {
+                    oauthClientSecretInput = secret
+                }
+                saveFeedback = "Imported OAuth Client ID ✓"
+                coordinator.appendLog("Imported Google OAuth Client ID from \(url.lastPathComponent).")
+            } else {
+                saveFeedback = "Invalid client_secret.json format."
+            }
+        } catch {
+            saveFeedback = "Failed to parse JSON: \(error.localizedDescription)"
+        }
+    }
+
+    private func saveAppPasswordAndConnect() {
         let email = settings.gmailAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !email.isEmpty else {
             saveFeedback = "Enter your Gmail address first."
