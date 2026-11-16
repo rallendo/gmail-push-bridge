@@ -111,6 +111,12 @@ struct MenuBarContentView: View {
         }
         .keyboardShortcut(",", modifiers: [.command])
 
+        Button("Google OAuth Setup Guide…") {
+            if let url = URL(string: "https://rallendo.github.io/gmail-push-bridge/oauth-setup.html") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+
         if let update = updateManager.availableUpdate {
             Button("⭐️ Update Available (\(update.tagName))…") {
                 SettingsWindowController.shared.show(coordinator: coordinator)

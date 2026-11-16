@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Google OAuth Setup Guide - Gmail Push Bridge</title>
+  <link rel="icon" type="image/png" href="logo-120.png">
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: #151d30;
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+      --accent: #3b82f6;
+      --border: #22304d;
+      --card-highlight: #1e293b;
+      --step-num-bg: #2563eb;
+      --tip-bg: rgba(59, 130, 246, 0.1);
+      --tip-border: #3b82f6;
+      --warn-bg: rgba(245, 158, 11, 0.1);
+      --warn-border: #f59e0b;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc;
+        --card-bg: #ffffff;
+        --text: #0f172a;
+        --text-muted: #64748b;
+        --accent: #2563eb;
+        --border: #e2e8f0;
+        --card-highlight: #f1f5f9;
+        --step-num-bg: #2563eb;
+        --tip-bg: #eff6ff;
+        --tip-border: #3b82f6;
+        --warn-bg: #fffbeb;
+        --warn-border: #f59e0b;
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 0 1.25rem 5rem;
+    }
+    header {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 2.5rem 0 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+      text-decoration: none;
+      color: var(--text);
+      font-weight: 700;
+      font-size: 1.25rem;
+    }
+    .brand img {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+    }
+    nav a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.95rem;
+      margin-left: 1.25rem;
+      transition: color 0.15s;
+    }
+    nav a:hover, nav a.active {
+      color: var(--accent);
+    }
+    main {
+      max-width: 860px;
+      margin: 2.5rem auto 0;
+    }
+    h1 {
+      font-size: 2.3rem;
+      margin-bottom: 0.5rem;
+      letter-spacing: -0.02em;
+    }
+    .lead {
+      font-size: 1.15rem;
+      color: var(--text-muted);
+      margin-bottom: 2rem;
+    }
+    .summary-bar {
+      display: flex;
+      gap: 1.5rem;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 2.5rem;
+      flex-wrap: wrap;
+    }
+    .summary-item strong {
+      display: block;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 0.2rem;
+    }
+    .step-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 2rem;
+      margin-bottom: 1.75rem;
+      position: relative;
+    }
+    .step-header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 1.25rem;
+    }
+    .step-number {
+      background: var(--step-num-bg);
+      color: #ffffff;
+      font-weight: 700;
+      font-size: 1.1rem;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .step-title {
+      font-size: 1.35rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+    ol, ul {
+      padding-left: 1.5rem;
+      margin-bottom: 1.25rem;
+    }
+    li {
+      margin-bottom: 0.65rem;
+    }
+    .btn-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      background: var(--card-highlight);
+      color: var(--accent);
+      border: 1px solid var(--border);
+      padding: 0.45rem 0.9rem;
+      border-radius: 8px;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 0.9rem;
+      margin-top: 0.25rem;
+    }
+    .btn-link:hover {
+      border-color: var(--accent);
+    }
+    .callout {
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin: 1.25rem 0 0.5rem;
+      font-size: 0.95rem;
+    }
+    .callout-tip {
+      background: var(--tip-bg);
+      border-left: 4px solid var(--tip-border);
+    }
+    .callout-warn {
+      background: var(--warn-bg);
+      border-left: 4px solid var(--warn-border);
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.9em;
+      background: var(--card-highlight);
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    footer {
+      max-width: 860px;
+      margin: 4rem auto 0;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <a href="index.html" class="brand">
+      <img src="logo-120.png" alt="Logo">
+      <span>Gmail Push Bridge</span>
+    </a>
+    <nav>
+      <a href="index.html">Overview</a>
+      <a href="oauth-setup.html" class="active">OAuth Setup</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="terms.html">Terms</a>
+      <a href="https://github.com/rallendo/gmail-push-bridge" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+  </header>
+
+  <main>
+    <h1>Google OAuth 2.0 Setup (BYOC)</h1>
+    <p class="lead">
+      Set up your own private Google Cloud Desktop Client ID in under 2 minutes. Free, zero external dependencies, and 100% private to you.
+    </p>
+
+    <div class="summary-bar">
+      <div class="summary-item">
+        <strong>Time Required</strong>
+        <span>~2 Minutes</span>
+      </div>
+      <div class="summary-item">
+        <strong>Cost</strong>
+        <span>$0 (Free Tier)</span>
+      </div>
+      <div class="summary-item">
+        <strong>Privacy</strong>
+        <span>100% Local Device Storage</span>
+      </div>
+    </div>
+
+    <!-- Step 1 -->
+    <div class="step-card">
+      <div class="step-header">
+        <div class="step-number">1</div>
+        <div class="step-title">Create a Free Google Cloud Project</div>
+      </div>
+      <ol>
+        <li>Open the Google Cloud <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener" class="btn-link">New Project Page &nearr;</a></li>
+        <li>Name the project <strong>Gmail Push Bridge</strong> (or any name you prefer).</li>
+        <li>Leave <em>Organization</em> as <strong>No organization</strong>.</li>
+        <li>Click <strong>Create</strong> and wait a few seconds.</li>
+      </ol>
+    </div>
+
+    <!-- Step 2 -->
+    <div class="step-card">
+      <div class="step-header">
+        <div class="step-number">2</div>
+        <div class="step-title">Enable the Gmail API</div>
+      </div>
+      <ol>
+        <li>Go directly to the <a href="https://console.cloud.google.com/apis/library/gmail.googleapis.com" target="_blank" rel="noopener" class="btn-link">Gmail API Library Page &nearr;</a></li>
+        <li>Make sure your newly created project is selected in the top bar.</li>
+        <li>Click <strong>Enable</strong>.</li>
+      </ol>
+    </div>
+
+    <!-- Step 3 -->
+    <div class="step-card">
+      <div class="step-header">
+        <div class="step-number">3</div>
+        <div class="step-title">Configure OAuth Consent Screen</div>
+      </div>
+      <ol>
+        <li>Navigate to <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" rel="noopener" class="btn-link">OAuth Consent Screen &nearr;</a></li>
+        <li>Select <strong>External</strong>, then click <strong>Create</strong>.</li>
+        <li>Fill out only the 3 basic fields:
+          <ul>
+            <li><strong>App name:</strong> <code>Gmail Push Bridge</code></li>
+            <li><strong>User support email:</strong> Choose your email from the dropdown.</li>
+            <li><strong>Developer contact email:</strong> Enter your email.</li>
+          </ul>
+        </li>
+        <li>Click <strong>Save and Continue</strong> on the App Information page.</li>
+        <li>Click <strong>Save and Continue</strong> on the <strong>Scopes</strong> page (the app requests IMAP dynamically).</li>
+        <li>Under <strong>Test users</strong>, click <strong>+ Add Users</strong>, enter your Gmail address, and click <strong>Add</strong>.</li>
+        <li>Click <strong>Save and Continue</strong>, then click <strong>Back to Dashboard</strong>.</li>
+      </ol>
+      <div class="callout callout-tip">
+        <strong>💡 Note on Publishing Status:</strong> Leave the project in <strong>Testing</strong> mode. Because you added your email as a Test User, you get immediate access with no audits or verification needed.
+      </div>
+    </div>
+
+    <!-- Step 4 -->
+    <div class="step-card">
+      <div class="step-header">
+        <div class="step-number">4</div>
+        <div class="step-title">Create Desktop OAuth Credentials</div>
+      </div>
+      <ol>
+        <li>Go to <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener" class="btn-link">Credentials Dashboard &nearr;</a></li>
+        <li>At the top, click <strong>+ Create Credentials</strong> &rarr; <strong>OAuth client ID</strong>.</li>
+        <li>Under <strong>Application type</strong>, choose <strong>Desktop app</strong>.</li>
+        <li>Name it <code>Gmail Push Bridge Desktop</code> (or default) and click <strong>Create</strong>.</li>
+        <li>In the popup that appears, click <strong>Download JSON</strong> (or copy your Client ID & Secret).</li>
+      </ol>
+    </div>
+
+    <!-- Step 5 -->
+    <div class="step-card">
+      <div class="step-header">
+        <div class="step-number">5</div>
+        <div class="step-title">Connect in Gmail Push Bridge</div>
+      </div>
+      <ol>
+        <li>Click the Gmail Push Bridge icon in your macOS Menu Bar &rarr; <strong>Settings & Status</strong>.</li>
+        <li>Make sure <strong>Sign in with Google (OAuth 2.0)</strong> is selected.</li>
+        <li>Click <strong>Import client_secret.json…</strong> and select the downloaded file (or paste your Client ID & Secret).</li>
+        <li>Click <strong>Sign in with Google (Passkey / Browser)</strong>.</li>
+        <li>When Google opens in your browser:
+          <ul>
+            <li>Select your Google account.</li>
+            <li>If you see a screen saying <em>"Google hasn't verified this app"</em>, click <strong>Advanced</strong> &rarr; <strong>Go to Gmail Push Bridge (unsafe)</strong>. <em>(This appears because your private project is in Testing mode).</em></li>
+            <li>Click <strong>Continue</strong> to authorize.</li>
+          </ul>
+        </li>
+      </ol>
+      <div class="callout callout-tip">
+        <strong>🎉 You're done!</strong> The status indicator will switch to green (<strong>IDLE active</strong>). Your Mac is now receiving instant Gmail push triggers directly into Apple Mail.
+      </div>
+    </div>
+
+  </main>
+
+  <footer>
+    &copy; 2026 Rick Allendoerfer. Open source under the MIT License.
+  </footer>
+</body>
+</html>

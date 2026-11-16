@@ -11,6 +11,7 @@ struct SettingsView: View {
     @State private var appPasswordInput: String = ""
     @State private var saveFeedback: String?
     @State private var launchAtLogin: Bool = LaunchAgentManager.isEnabled
+    @State private var showOAuthSetupGuide: Bool = false
 
     private static let timeFormatter: DateFormatter = {
         let df = DateFormatter()
@@ -33,6 +34,9 @@ struct SettingsView: View {
         }
         .frame(minWidth: 540, idealWidth: 640, maxWidth: .infinity,
                minHeight: 520, idealHeight: 740, maxHeight: .infinity)
+        .sheet(isPresented: $showOAuthSetupGuide) {
+            OAuthSetupGuideSheet()
+        }
         .onAppear {
             if let existing = KeychainStore.loadAppPassword(for: settings.gmailAddress) {
                 appPasswordInput = existing
@@ -104,9 +108,59 @@ struct SettingsView: View {
     @ViewBuilder
     private var oauthSectionContent: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // Setup Guide helper banner
+            HStack(spacing: 10) {
+                Image(systemName: "questionmark.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(.blue)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Need a Google OAuth Client ID?")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Takes ~2 minutes to set up your free, private Google Cloud credentials.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button("Setup Guide") {
+                    showOAuthSetupGuide = true
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+
+                Button {
+                    if let url = URL(string: "https://rallendo.github.io/gmail-push-bridge/oauth-setup.html") {
+                        NSWorkspace.shared.open(url)
+                    }
+                } label: {
+                    Image(systemName: "arrow.up.forward.square")
+                }
+                .buttonStyle(.borderless)
+                .help("Open web guide in browser")
+            }
+            .padding(10)
+            .background(Color.blue.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.blue.opacity(0.2), lineWidth: 1)
+            )
+
             VStack(alignment: .leading, spacing: 4) {
-                Text("Google OAuth Desktop Client ID")
-                    .font(.subheadline.weight(.medium))
+                HStack {
+                    Text("Google OAuth Desktop Client ID")
+                        .font(.subheadline.weight(.medium))
+                    Spacer()
+                    Button {
+                        showOAuthSetupGuide = true
+                    } label: {
+                        Label("How to get this?", systemImage: "info.circle")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.link)
+                }
                 HStack(spacing: 8) {
                     TextField("xxx.apps.googleusercontent.com", text: $settings.oauthClientId)
                         .textFieldStyle(.roundedBorder)
@@ -576,5 +630,137 @@ struct SettingsView: View {
             saveFeedback = error.localizedDescription
             coordinator.appendLog("Keychain save failed: \(error.localizedDescription)")
         }
+    }
+}
+
+struct OAuthSetupGuideSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Google OAuth Setup Guide")
+                        .font(.headline)
+                    Text("Create your free private Desktop Client ID in under 2 minutes")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done") {
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding()
+            .background(Color.secondary.opacity(0.08))
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    guideStep(
+                        number: "1",
+                        title: "Create a Google Cloud Project",
+                        description: "Name it 'Gmail Push Bridge' (leave Organization as 'No organization').",
+                        url: "https://console.cloud.google.com/projectcreate",
+                        buttonTitle: "Open New Project Page ↗"
+                    )
+
+                    guideStep(
+                        number: "2",
+                        title: "Enable the Gmail API",
+                        description: "Select your project in the top bar, then click Enable.",
+                        url: "https://console.cloud.google.com/apis/library/gmail.googleapis.com",
+                        buttonTitle: "Open Gmail API Library ↗"
+                    )
+
+                    guideStep(
+                        number: "3",
+                        title: "Configure OAuth Consent Screen",
+                        description: "Choose 'External' → fill in your email → under 'Test users' add your Gmail address → leave status as 'Testing'.",
+                        url: "https://console.cloud.google.com/apis/credentials/consent",
+                        buttonTitle: "Open Consent Screen ↗"
+                    )
+
+                    guideStep(
+                        number: "4",
+                        title: "Create Desktop OAuth Credentials",
+                        description: "Click '+ Create Credentials' → 'OAuth client ID' → choose 'Desktop app' → click 'Create' → Download JSON.",
+                        url: "https://console.cloud.google.com/apis/credentials",
+                        buttonTitle: "Open Credentials Dashboard ↗"
+                    )
+
+                    guideStep(
+                        number: "5",
+                        title: "Import into Gmail Push Bridge",
+                        description: "Click 'Import client_secret.json…' in Settings, then click 'Sign in with Google'. Click 'Advanced → Go to Gmail Push Bridge (unsafe)' to approve your private app.",
+                        url: nil,
+                        buttonTitle: nil
+                    )
+                }
+                .padding()
+            }
+
+            Divider()
+
+            HStack {
+                Button("Open Web Guide in Browser ↗") {
+                    if let url = URL(string: "https://rallendo.github.io/gmail-push-bridge/oauth-setup.html") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+
+                Spacer()
+
+                Button("Close") {
+                    dismiss()
+                }
+            }
+            .padding(12)
+            .background(Color.secondary.opacity(0.05))
+        }
+        .frame(width: 530, height: 570)
+    }
+
+    private func guideStep(
+        number: String,
+        title: String,
+        description: String,
+        url: String?,
+        buttonTitle: String?
+    ) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(number)
+                .font(.system(.subheadline, design: .rounded).weight(.bold))
+                .foregroundStyle(.white)
+                .frame(width: 24, height: 24)
+                .background(Color.blue)
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Text(description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let urlString = url, let buttonTitle = buttonTitle, let targetUrl = URL(string: urlString) {
+                    Button(buttonTitle) {
+                        NSWorkspace.shared.open(targetUrl)
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption.weight(.medium))
+                    .padding(.top, 2)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color.secondary.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }

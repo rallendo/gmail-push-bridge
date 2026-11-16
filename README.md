@@ -37,13 +37,17 @@ open dist/GmailPushBridge.app
 
 ### 3. Authenticate with Gmail (Choose Either Method)
 
-#### Method A: Sign in with Google (OAuth 2.0 / Passkey)
-1. In [Google Cloud Console → Credentials](https://console.cloud.google.com/apis/credentials), click **Create Credentials → OAuth client ID** and choose **Application type: Desktop app**.
-2. Download the JSON file (or copy the Client ID & Secret).
-3. In Gmail Push Bridge **Settings**, click **Import client_secret.json…** (or paste your Client ID & Secret).
-4. Click **Sign in with Google (Passkey / Browser)** — Safari/Chrome will open so you can sign in with your Passkey / Touch ID. Your Gmail address and OAuth tokens are saved automatically to your macOS Keychain.
+#### Method A: Sign in with Google (OAuth 2.0 / Passkey — Recommended)
+Run with your own free Google Cloud Desktop credentials for maximum privacy.
+👉 **See the complete 2-minute walkthrough: [OAUTH_SETUP.md](OAUTH_SETUP.md)**
 
-#### Method B: Google App Password (No Google Cloud Setup)
+1. Create a free project at [Google Cloud Console](https://console.cloud.google.com/projectcreate) and enable the [Gmail API](https://console.cloud.google.com/apis/library/gmail.googleapis.com).
+2. Configure **OAuth consent screen** (User type: *External*, add your Gmail under *Test users*, leave status in *Testing*).
+3. In **Credentials**, click **Create Credentials → OAuth client ID** and choose **Application type: Desktop app**. Download the JSON file.
+4. In Gmail Push Bridge **Settings**, click **Import client_secret.json…** (or paste Client ID & Secret).
+5. Click **Sign in with Google (Passkey / Browser)** — Safari/Chrome opens for Touch ID / Passkey authentication. Tokens are stored securely in your macOS Keychain.
+
+#### Method B: Google App Password (Zero Google Cloud Setup)
 1. Switch the picker in **Settings** to **Google App Password**.
 2. Enter your **Gmail Address**, click **Get App Password ↗** ([myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)), and paste the 16-character code.
 3. Click **Save & Connect**.
