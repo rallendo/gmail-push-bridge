@@ -29,6 +29,7 @@ struct SettingsView: View {
                 timingSection
                 updatesSection
                 activityLogSection
+                sponsorSection
             }
             .padding(18)
         }
@@ -543,6 +544,41 @@ struct SettingsView: View {
             Label("Live Activity Log", systemImage: "terminal.fill")
                 .font(.headline)
         }
+    }
+
+    private var sponsorSection: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "heart.fill")
+                .foregroundStyle(.pink)
+                .font(.subheadline)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Enjoying Gmail Push Bridge?")
+                    .font(.caption.weight(.medium))
+                Text("Support ongoing development or buy the developer a coffee.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button {
+                if let url = URL(string: "https://github.com/sponsors/rallendo") {
+                    NSWorkspace.shared.open(url)
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text("☕️ Sponsor on GitHub")
+                    Image(systemName: "arrow.up.forward.app")
+                        .font(.caption2)
+                }
+            }
+            .buttonStyle(.link)
+            .font(.caption.weight(.semibold))
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private var statusColor: Color {

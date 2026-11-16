@@ -117,6 +117,12 @@ struct MenuBarContentView: View {
             }
         }
 
+        Button("☕️ Buy Me a Coffee / Sponsor…") {
+            if let url = URL(string: "https://github.com/sponsors/rallendo") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+
         if let update = updateManager.availableUpdate {
             Button("⭐️ Update Available (\(update.tagName))…") {
                 SettingsWindowController.shared.show(coordinator: coordinator)

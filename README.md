@@ -1,5 +1,9 @@
 # Gmail Push Bridge for Apple Mail (macOS)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![macOS 13+](https://img.shields.io/badge/macOS-13%2B-lightgrey.svg)](https://apple.com/macos)
+[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink?logo=github)](https://github.com/sponsors/rallendo)
+
 A lightweight native macOS Menu Bar utility written in Swift that brings **instant Gmail push** to **Apple Mail**.
 
 It maintains a persistent, sleep/wake-aware **IMAP `IDLE`** TLS connection to `imap.gmail.com:993` using Apple's `Network.framework`. The instant a new email lands in your Gmail `INBOX`, it triggers Apple Mail to fetch via AppleScript—without opening windows or interrupting your workflow.
@@ -55,3 +59,9 @@ Run with your own free Google Cloud Desktop credentials for maximum privacy.
 ### 4. Target Your Apple Mail Account
 1. Click **Detect from Mail** to select your Gmail account name in Apple Mail (e.g., `Google`).
 2. Click **Test Apple Mail Trigger** once—macOS will prompt you to allow `Gmail Push Bridge` to control `Mail`. Click **Allow**.
+
+---
+
+## Support & Sponsorship
+
+If you find Gmail Push Bridge helpful and it saves you time, consider [sponsoring the project on GitHub](https://github.com/sponsors/rallendo) or buying me a cup of coffee. Your support helps maintain the project, keep up with macOS updates, and add new features! ☕️❤️
