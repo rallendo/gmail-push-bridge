@@ -1,0 +1,25 @@
+# Swift Package Manager & Builds
+.build/
+.swiftpm/
+dist/
+DerivedData/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Sensitive files / Local overrides
+*.env
+*.env.*
+*.keychain
+*.keychain-db
+
+# Editor configurations
+.idea/
+.vscode/
+*.swp
+*~

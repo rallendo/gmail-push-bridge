@@ -1,0 +1,216 @@
+import AppKit
+import Foundation
+
+struct LogEntry: Identifiable, Sendable {
+    let id = UUID()
+    let timestamp: Date
+    let message: String
+}
+
+@MainActor
+final class BridgeCoordinator: ObservableObject {
+    let settings = AppSettings()
+
+    @Published private(set) var connectionState: IMAPConnectionState = .disconnected
+    @Published private(set) var isPaused: Bool = false
+    @Published private(set) var lastTriggerDate: Date?
+    @Published private(set) var lastTriggerSummary: String = "No push triggered yet"
+    @Published private(set) var totalPushesTriggered: Int = 0
+    @Published private(set) var detectedMailAccounts: [String] = []
+    @Published private(set) var activityLog: [LogEntry] = []
+
+    private let mailBridge = AppleMailBridge()
+    private var imapClient: IMAPIdleClient?
+    private var systemMonitor: SystemMonitor?
+    private var debounceTask: Task<Void, Never>?
+
+    init() {
+        setupClients()
+        if settings.isConfigured {
+            startMonitoring()
+        } else {
+            appendLog("Welcome! Add your Gmail address and 16-char App Password above to start.")
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                guard let self else { return }
+                SettingsWindowController.shared.show(coordinator: self)
+            }
+        }
+    }
+
+    private func setupClients() {
+        imapClient = IMAPIdleClient { [weak self] event in
+            Task { @MainActor [weak self] in
+                self?.handleIMAPEvent(event)
+            }
+        }
+
+        systemMonitor = SystemMonitor(
+            onSystemWake: { [weak self] in
+                Task { @MainActor [weak self] in
+                    guard let self, !self.isPaused, self.settings.isConfigured else { return }
+                    self.appendLog("Mac woke from sleep — reconnecting IMAP IDLE & checking mail.")
+                    self.imapClient?.forceReconnect(reason: "Mac woke from sleep")
+                    self.scheduleDebouncedFetch(reason: "Wake from sleep", delayOverride: 3.0)
+                }
+            },
+            onNetworkRestored: { [weak self] in
+                Task { @MainActor [weak self] in
+                    guard let self, !self.isPaused, self.settings.isConfigured else { return }
+                    self.appendLog("Network path changed/restored — refreshing IMAP IDLE session.")
+                    self.imapClient?.forceReconnect(reason: "Network path updated")
+                }
+            }
+        )
+        systemMonitor?.start()
+    }
+
+    func startMonitoring() {
+        let email = settings.gmailAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !email.isEmpty, let appPassword = settings.sanitizedAppPassword() else {
+            connectionState = .disconnected
+            appendLog("Cannot start: Gmail address or App Password missing.")
+            return
+        }
+
+        isPaused = false
+        let config = IMAPConfiguration(
+            host: settings.imapHost,
+            port: settings.imapPort,
+            email: email,
+            appPassword: appPassword,
+            mailbox: settings.watchedMailbox,
+            idleRenewalMinutes: settings.idleRenewalMinutes
+        )
+        imapClient?.start(with: config)
+    }
+
+    func pauseMonitoring() {
+        isPaused = true
+        debounceTask?.cancel()
+        imapClient?.stop()
+        appendLog("Monitoring paused by user.")
+    }
+
+    func togglePause() {
+        if isPaused {
+            startMonitoring()
+        } else {
+            pauseMonitoring()
+        }
+    }
+
+    func reconnectNow() {
+        guard settings.isConfigured else {
+            appendLog("Configure your Gmail credentials in Settings first.")
+            return
+        }
+        isPaused = false
+        startMonitoring()
+    }
+
+    func triggerManualFetch() {
+        appendLog("Manual Apple Mail fetch requested.")
+        Task {
+            await executeMailFetch(reason: "Manual trigger")
+        }
+    }
+
+    func refreshMailAccounts() {
+        Task {
+            do {
+                let accounts = try await mailBridge.fetchAccountNames()
+                self.detectedMailAccounts = accounts
+                if !accounts.isEmpty {
+                    appendLog("Detected Apple Mail accounts: \(accounts.joined(separator: ", "))")
+                    if !accounts.contains(settings.appleMailAccountName),
+                       let likelyGmail = accounts.first(where: {
+                           $0.localizedCaseInsensitiveContains("google") ||
+                           $0.localizedCaseInsensitiveContains("gmail") ||
+                           $0.localizedCaseInsensitiveContains(settings.gmailAddress)
+                       }) {
+                        settings.appleMailAccountName = likelyGmail
+                    }
+                }
+            } catch {
+                appendLog("Could not list Apple Mail accounts: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    // MARK: - Event Handling & Debouncing
+
+    private func handleIMAPEvent(_ event: IMAPClientEvent) {
+        switch event {
+        case .stateChanged(let state):
+            self.connectionState = state
+        case .inboxCountUpdated:
+            break
+        case .newMailDetected(let count):
+            scheduleDebouncedFetch(reason: "Gmail IDLE (* \(count) EXISTS)", delayOverride: nil)
+        case .log(let message):
+            appendLog(message)
+        }
+    }
+
+    private func scheduleDebouncedFetch(reason: String, delayOverride: Double?) {
+        debounceTask?.cancel()
+        let delaySeconds = max(0.5, delayOverride ?? settings.debounceSeconds)
+
+        debounceTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
+            guard !Task.isCancelled, let self else { return }
+            await self.executeMailFetch(reason: reason)
+        }
+    }
+
+    private func executeMailFetch(reason: String) async {
+        let result = await mailBridge.triggerFetch(
+            accountName: settings.appleMailAccountName,
+            fallbackToAllAccounts: settings.checkAllAccountsFallback,
+            includeSynchronize: settings.runSynchronizeInAdditionToCheck
+        )
+
+        lastTriggerDate = result.timestamp
+        switch result.outcome {
+        case .triggeredAccount(let account):
+            totalPushesTriggered += 1
+            lastTriggerSummary = "Fetched '\(account)' (\(reason))"
+            appendLog("Triggered Apple Mail fetch for account '\(account)' [\(reason)].")
+        case .triggeredAllAccounts:
+            totalPushesTriggered += 1
+            lastTriggerSummary = "Fetched all accounts (\(reason))"
+            appendLog("Triggered Apple Mail fetch for all accounts [\(reason)].")
+        case .skippedMailNotRunning:
+            lastTriggerSummary = "Skipped (Apple Mail not running)"
+            appendLog("Skipped push trigger because Apple Mail is not currently running.")
+        case .failed(let errorMessage):
+            lastTriggerSummary = "Failed: \(errorMessage)"
+            appendLog("Apple Mail trigger error: \(errorMessage)")
+        }
+    }
+
+    func appendLog(_ message: String) {
+        let entry = LogEntry(timestamp: Date(), message: message)
+        activityLog.insert(entry, at: 0)
+        if activityLog.count > 60 {
+            activityLog.removeLast(activityLog.count - 60)
+        }
+    }
+
+    var menuBarIconName: String {
+        if isPaused {
+            return "envelope.badge.fill"
+        }
+        switch connectionState {
+        case .idling:
+            return "bolt.horizontal.circle.fill"
+        case .connecting, .authenticating, .selectingMailbox, .reconnecting:
+            return "arrow.triangle.2.circlepath.circle"
+        case .authFailed, .error:
+            return "exclamationmark.triangle.fill"
+        case .disconnected:
+            return "envelope"
+        }
+    }
+}
