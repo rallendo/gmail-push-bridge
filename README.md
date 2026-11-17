@@ -62,6 +62,21 @@ Run with your own free Google Cloud Desktop credentials for maximum privacy.
 
 ---
 
+## Feature Roadmap & Community Upvoting
+
+Help shape future releases! React with a **👍 (+1)** on any GitHub issue below to vote for features you want to see:
+
+| Feature | Description | Status & Upvoting |
+| :--- | :--- | :---: |
+| **Yahoo Mail & AOL Support** | Instant push for `imap.mail.yahoo.com` using Yahoo App Passwords. | [👍 Upvote Issue #3 ↗](https://github.com/rallendo/gmail-push-bridge/issues/3) |
+| **Multi-Account Monitoring** | Concurrently watch multiple mailboxes (e.g., personal + work + Yahoo) in one running app. | [👍 Upvote Issue #4 ↗](https://github.com/rallendo/gmail-push-bridge/issues/4) |
+| **Microsoft Outlook & Office 365** | Modern Auth (OAuth 2.0 / MSAL) push bridge for Outlook.com and Office 365. | [👍 Upvote Issue #5 ↗](https://github.com/rallendo/gmail-push-bridge/issues/5) |
+| **Custom & Self-Hosted IMAP** | Configure custom host, port, and security for Fastmail, Dovecot, and private servers. | [👍 Upvote Issue #6 ↗](https://github.com/rallendo/gmail-push-bridge/issues/6) |
+
+Have another idea? [Submit a Feature Request ↗](https://github.com/rallendo/gmail-push-bridge/issues/new?template=feature_request.yml) or join the community on [GitHub Discussions ↗](https://github.com/rallendo/gmail-push-bridge/discussions).
+
+---
+
 ## Support & Sponsorship
 
 If you find Gmail Push Bridge helpful and it saves you time, consider [sponsoring the project on GitHub](https://github.com/sponsors/rallendo) or buying me a cup of coffee. Your support helps maintain the project, keep up with macOS updates, and add new features! ☕️❤️
