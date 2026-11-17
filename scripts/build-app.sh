@@ -6,12 +6,12 @@ PROJECT_DIR="${SCRIPT_DIR:h}"
 cd "$PROJECT_DIR"
 
 echo "==> Building GmailPushBridge (release)…"
-mkdir -p .build/release /tmp/swift-module-cache
+mkdir -p .build/release "$PROJECT_DIR/.build/swift-module-cache"
 swiftc -O \
     -disable-sandbox \
     -parse-as-library \
     -target arm64-apple-macosx13.0 \
-    -module-cache-path /tmp/swift-module-cache \
+    -module-cache-path "$PROJECT_DIR/.build/swift-module-cache" \
     Sources/GmailPushBridge/*.swift \
     -o .build/release/GmailPushBridge
 
@@ -58,11 +58,14 @@ cat > "$CONTENTS_DIR/Info.plist" <<'EOF'
 </plist>
 EOF
 
-echo "==> Signing app bundle (ad-hoc)…"
-codesign --force --deep --sign - "$APP_BUNDLE"
+CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
+echo "==> Signing app bundle (identity: ${CODESIGN_IDENTITY})…"
+codesign --force --options runtime --sign "$CODESIGN_IDENTITY" "$APP_BUNDLE"
+codesign --verify --strict --verbose=2 "$APP_BUNDLE"
 
 echo "==> Creating release archive (${APP_NAME}.zip)…"
-(cd "$PROJECT_DIR/dist" && rm -f "${APP_NAME}.zip" && /usr/bin/ditto -c -k --keepParent "${APP_NAME}.app" "${APP_NAME}.zip")
+(cd "$PROJECT_DIR/dist" && rm -f "${APP_NAME}.zip" "${APP_NAME}.zip.sha256" && /usr/bin/ditto -c -k --keepParent "${APP_NAME}.app" "${APP_NAME}.zip" && /usr/bin/shasum -a 256 "${APP_NAME}.zip" > "${APP_NAME}.zip.sha256")
 
 echo "==> Done! App bundle created at: $APP_BUNDLE"
 echo "==> Release archive created at: $PROJECT_DIR/dist/${APP_NAME}.zip"
+echo "==> Checksum created at: $PROJECT_DIR/dist/${APP_NAME}.zip.sha256"
