@@ -72,6 +72,14 @@ Help shape future releases! React with a **👍 (+1)** on any GitHub issue below
 | **Multi-Account Monitoring** | Concurrently watch multiple mailboxes (e.g., personal + work + Yahoo) in one running app. | [👍 Upvote Issue #4 ↗](https://github.com/rallendo/gmail-push-bridge/issues/4) |
 | **Microsoft Outlook & Office 365** | Modern Auth (OAuth 2.0 / MSAL) push bridge for Outlook.com and Office 365. | [👍 Upvote Issue #5 ↗](https://github.com/rallendo/gmail-push-bridge/issues/5) |
 | **Custom & Self-Hosted IMAP** | Configure custom host, port, and security for Fastmail, Dovecot, and private servers. | [👍 Upvote Issue #6 ↗](https://github.com/rallendo/gmail-push-bridge/issues/6) |
+| **Auto-Disconnect When Apple Mail Closes** | Automatically pause IMAP IDLE when Mail.app quits and reconnect + fetch when Mail launches. | [👍 Upvote Issue #17 ↗](https://github.com/rallendo/gmail-push-bridge/issues/17) |
+| **macOS Focus Filter & Quiet Hours** | Auto-pause push monitoring during Do Not Disturb / Sleep Focus or scheduled Quiet Hours. | [👍 Upvote Issue #18 ↗](https://github.com/rallendo/gmail-push-bridge/issues/18) |
+| **Low Power Mode Awareness** | Widen debounce intervals or optionally pause IDLE when macOS Low Power Mode is active. | [👍 Upvote Issue #19 ↗](https://github.com/rallendo/gmail-push-bridge/issues/19) |
+| **Two-Way Read & Archive Sync** | Trigger debounced Apple Mail sync when emails are read or archived on another device to clear stale badges. | [👍 Upvote Issue #20 ↗](https://github.com/rallendo/gmail-push-bridge/issues/20) |
+| **VIP & Primary-Only Push Filtering** | Filter incoming pushes by Gmail category/label or VIP sender so promotions don't wake Apple Mail. | [👍 Upvote Issue #21 ↗](https://github.com/rallendo/gmail-push-bridge/issues/21) |
+| **Native Auth & Error Notifications** | Post a macOS Notification Center alert with a Reconnect action if OAuth or App Password auth fails. | [👍 Upvote Issue #22 ↗](https://github.com/rallendo/gmail-push-bridge/issues/22) |
+| **macOS Shortcuts & Global Hotkey** | Expose Trigger Fetch, Pause, and Resume actions to macOS Shortcuts, Spotlight, and a global hotkey. | [👍 Upvote Issue #23 ↗](https://github.com/rallendo/gmail-push-bridge/issues/23) |
+| **Connection Health & Diagnostics** | View session uptime, daily push counts, reconnect stats, and one-click redacted diagnostic logs. | [👍 Upvote Issue #24 ↗](https://github.com/rallendo/gmail-push-bridge/issues/24) |
 
 Have another idea? [Submit a Feature Request ↗](https://github.com/rallendo/gmail-push-bridge/issues/new?template=feature_request.yml) or join the community on [GitHub Discussions ↗](https://github.com/rallendo/gmail-push-bridge/discussions).
 
