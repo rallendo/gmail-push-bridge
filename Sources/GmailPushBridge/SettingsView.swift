@@ -227,6 +227,8 @@ struct SettingsView: View {
                         }
                         Button("Sign Out") {
                             coordinator.signOutOAuth()
+                            oauthClientSecretInput = ""
+                            appPasswordInput = ""
                             saveFeedback = "OAuth tokens removed."
                         }
                     }
@@ -250,8 +252,19 @@ struct SettingsView: View {
     private var appPasswordSectionContent: some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Gmail Address")
-                    .font(.subheadline.weight(.medium))
+                HStack {
+                    Text("Gmail Address")
+                        .font(.subheadline.weight(.medium))
+                    Spacer()
+                    if settings.hasAppPassword {
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark.circle.fill")
+                            Text("App Password Saved")
+                        }
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.green)
+                    }
+                }
                 TextField("you@gmail.com", text: $settings.gmailAddress)
                     .textFieldStyle(.roundedBorder)
             }
@@ -276,6 +289,14 @@ struct SettingsView: View {
                         saveAppPasswordAndConnect()
                     }
                     .buttonStyle(.borderedProminent)
+
+                    if settings.hasAppPassword {
+                        Button("Remove App Password") {
+                            coordinator.removeAppPassword()
+                            appPasswordInput = ""
+                            saveFeedback = "App Password removed."
+                        }
+                    }
 
                     Button("Test Apple Mail Trigger") {
                         coordinator.triggerManualFetch()
@@ -660,6 +681,7 @@ struct SettingsView: View {
 
         do {
             try KeychainStore.saveAppPassword(cleanedPassword, for: email)
+            settings.objectWillChange.send()
             saveFeedback = "Saved to Keychain ✓"
             coordinator.startMonitoring()
         } catch {

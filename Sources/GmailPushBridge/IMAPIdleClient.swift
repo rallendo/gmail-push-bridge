@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import Security
 
 enum IMAPClientEvent: Sendable {
     case stateChanged(IMAPConnectionState)
@@ -60,6 +61,8 @@ struct IMAPConfiguration: Sendable {
 }
 
 final class IMAPIdleClient: @unchecked Sendable {
+    nonisolated static let maxReceiveBufferBytes = 65_536
+
     private let queue = DispatchQueue(label: "com.gmailpushbridge.imap", qos: .utility)
     private let eventHandler: @Sendable (IMAPClientEvent) -> Void
 
@@ -132,6 +135,13 @@ final class IMAPIdleClient: @unchecked Sendable {
     private func connectInternal() {
         guard !isStopped, let config else { return }
 
+        guard AppSettings.isAllowedGmailIMAPEndpoint(host: config.host, port: config.port) else {
+            isStopped = true
+            eventHandler(.log("Blocked connection to untrusted IMAP endpoint \(config.host):\(config.port)"))
+            eventHandler(.stateChanged(.authFailed("Untrusted IMAP host: \(config.host):\(config.port)")))
+            return
+        }
+
         cancelTimers()
         teardownConnection()
         receiveBuffer.removeAll(keepingCapacity: false)
@@ -148,6 +158,10 @@ final class IMAPIdleClient: @unchecked Sendable {
         tcpOptions.connectionTimeout = 15
 
         let tlsOptions = NWProtocolTLS.Options()
+        sec_protocol_options_set_min_tls_protocol_version(
+            tlsOptions.securityProtocolOptions,
+            .TLSv12
+        )
         let parameters = NWParameters(tls: tlsOptions, tcp: tcpOptions)
 
         guard let port = NWEndpoint.Port(rawValue: config.port) else {
@@ -192,6 +206,12 @@ final class IMAPIdleClient: @unchecked Sendable {
             guard conn === self.connection, !self.isStopped else { return }
 
             if let data, !data.isEmpty {
+                if self.receiveBuffer.count + data.count > Self.maxReceiveBufferBytes {
+                    self.receiveBuffer.removeAll(keepingCapacity: false)
+                    self.eventHandler(.log("IMAP receive buffer exceeded \(Self.maxReceiveBufferBytes) bytes; disconnecting."))
+                    self.scheduleReconnect(reason: "IMAP response line exceeded maximum buffer size")
+                    return
+                }
                 self.receiveBuffer.append(data)
                 self.processBufferedLines()
             }
@@ -496,8 +516,11 @@ final class IMAPIdleClient: @unchecked Sendable {
         return number
     }
 
-    private static func escapeIMAPQuoted(_ value: String) -> String {
-        value
+    nonisolated static func escapeIMAPQuoted(_ value: String) -> String {
+        let sanitized = String(value.unicodeScalars.filter { scalar in
+            scalar.value >= 0x20 && scalar.value != 0x7F
+        })
+        return sanitized
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
     }

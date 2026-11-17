@@ -86,12 +86,33 @@ final class BridgeCoordinator: ObservableObject {
 
     func signOutOAuth() {
         let email = settings.gmailAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        let existingTokens = email.isEmpty ? nil : KeychainStore.loadOAuthTokens(for: email)
+
         imapClient?.stop()
+        connectionState = .disconnected
         if !email.isEmpty {
             KeychainStore.deleteOAuthTokens(for: email)
         }
         settings.objectWillChange.send()
         appendLog("Removed stored OAuth tokens from Keychain.")
+
+        if let tokens = existingTokens {
+            let tokenToRevoke = tokens.refreshToken.isEmpty ? tokens.accessToken : tokens.refreshToken
+            Task {
+                await GoogleOAuthManager.shared.revokeToken(tokenToRevoke)
+            }
+        }
+    }
+
+    func removeAppPassword() {
+        let email = settings.gmailAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        imapClient?.stop()
+        connectionState = .disconnected
+        if !email.isEmpty {
+            KeychainStore.deleteAppPassword(for: email)
+        }
+        settings.objectWillChange.send()
+        appendLog("Removed stored App Password from Keychain.")
     }
 
     func startMonitoring() {

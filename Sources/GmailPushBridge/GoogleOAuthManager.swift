@@ -66,7 +66,10 @@ actor GoogleOAuthManager {
 
     private struct UserInfoResponse: Decodable {
         let email: String?
+        let email_verified: Bool?
     }
+
+    private var inFlightRefreshes: [String: Task<String, Error>] = [:]
 
     /// Starts the interactive browser OAuth 2.0 + PKCE flow (supports Passkeys / Touch ID in Safari/Chrome).
     func signInWithBrowser(
@@ -86,7 +89,7 @@ actor GoogleOAuthManager {
         let expectedState = Self.generateRandomURLSafeString(byteCount: 16)
 
         // 1. Start ephemeral loopback listener on 127.0.0.1:<ephemeral_port>
-        let callbackSession = try LoopbackCallbackServer()
+        let callbackSession = try LoopbackCallbackServer(expectedState: expectedState)
         let port = try await callbackSession.start()
         let redirectURI = "http://127.0.0.1:\(port)/oauth2callback"
 
@@ -152,12 +155,8 @@ actor GoogleOAuthManager {
             throw GoogleOAuthError.tokenExchangeFailed("Google did not return a refresh_token. Try signing in again.")
         }
 
-        // 6. Fetch user's email address from Google UserInfo if available
-        let fetchedEmail = try? await fetchUserEmail(accessToken: tokenResponse.access_token)
-        let resolvedEmail = fetchedEmail ?? loginHintEmail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !resolvedEmail.isEmpty else {
-            throw GoogleOAuthError.invalidCallback("Could not determine Gmail address; please enter your Gmail address in Settings.")
-        }
+        // 6. Fetch and verify user's email address from Google UserInfo
+        let resolvedEmail = try await fetchUserEmail(accessToken: tokenResponse.access_token)
 
         let tokenSet = OAuthTokenSet(
             accessToken: tokenResponse.access_token,
@@ -173,7 +172,12 @@ actor GoogleOAuthManager {
 
     /// Returns a valid (non-expired) access token for the given account, refreshing automatically if needed.
     func validAccessToken(for email: String) async throws -> String {
-        guard var tokens = KeychainStore.loadOAuthTokens(for: email) else {
+        let key = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let existing = inFlightRefreshes[key] {
+            return try await existing.value
+        }
+
+        guard let tokens = KeychainStore.loadOAuthTokens(for: key) else {
             throw GoogleOAuthError.noStoredTokens
         }
 
@@ -181,19 +185,54 @@ actor GoogleOAuthManager {
             return tokens.accessToken
         }
 
-        let refreshed = try await refreshAccessToken(tokens: tokens)
-        tokens.accessToken = refreshed.access_token
-        tokens.expiresAt = Date().addingTimeInterval(TimeInterval(refreshed.expires_in))
-        if let newRefresh = refreshed.refresh_token, !newRefresh.isEmpty {
-            tokens.refreshToken = newRefresh
+        let task = Task<String, Error> {
+            var updatedTokens = tokens
+            let refreshed = try await self.refreshAccessToken(tokens: updatedTokens)
+            updatedTokens.accessToken = refreshed.access_token
+            updatedTokens.expiresAt = Date().addingTimeInterval(TimeInterval(refreshed.expires_in))
+            if let newRefresh = refreshed.refresh_token, !newRefresh.isEmpty {
+                updatedTokens.refreshToken = newRefresh
+            }
+            try KeychainStore.saveOAuthTokens(updatedTokens, for: key)
+            return updatedTokens.accessToken
         }
-        try KeychainStore.saveOAuthTokens(tokens, for: email)
-        return tokens.accessToken
+
+        inFlightRefreshes[key] = task
+        defer { inFlightRefreshes[key] = nil }
+        return try await task.value
+    }
+
+    /// Best-effort revocation of an OAuth token at Google's revocation endpoint.
+    func revokeToken(_ token: String) async {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let url = URL(string: "https://oauth2.googleapis.com/revoke") else {
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 10
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+
+        var components = URLComponents()
+        components.queryItems = [URLQueryItem(name: "token", value: trimmed)]
+        request.httpBody = components.percentEncodedQuery?.data(using: .utf8)
+
+        _ = try? await URLSession.shared.data(for: request)
+    }
+
+    nonisolated static func sanitizeSASLField(_ value: String) -> String {
+        String(value.unicodeScalars.filter { scalar in
+            scalar.value > 0x20 && scalar.value != 0x7F
+        })
     }
 
     /// Builds the base64-encoded SASL XOAUTH2 string for IMAP `AUTHENTICATE XOAUTH2 <base64>`.
     nonisolated static func buildXOAuth2SASL(email: String, accessToken: String) -> String {
-        let raw = "user=\(email)\u{01}auth=Bearer \(accessToken)\u{01}\u{01}"
+        let cleanEmail = sanitizeSASLField(email)
+        let cleanToken = sanitizeSASLField(accessToken)
+        let raw = "user=\(cleanEmail)\u{01}auth=Bearer \(cleanToken)\u{01}\u{01}"
         return Data(raw.utf8).base64EncodedString()
     }
 
@@ -255,12 +294,21 @@ actor GoogleOAuthManager {
         }
     }
 
-    private func fetchUserEmail(accessToken: String) async throws -> String? {
+    private func fetchUserEmail(accessToken: String) async throws -> String {
         var request = URLRequest(url: URL(string: "https://www.googleapis.com/oauth2/v3/userinfo")!)
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(statusCode) else {
+            throw GoogleOAuthError.tokenExchangeFailed("Failed to verify Google account email (HTTP \(statusCode)).")
+        }
         let info = try JSONDecoder().decode(UserInfoResponse.self, from: data)
-        return info.email
+        guard info.email_verified != false,
+              let email = info.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else {
+            throw GoogleOAuthError.invalidCallback("Google did not return a verified email address for this account.")
+        }
+        return email
     }
 
     // MARK: - PKCE Helpers
@@ -293,10 +341,13 @@ actor GoogleOAuthManager {
 
 private actor LoopbackCallbackServer {
     private let queue = DispatchQueue(label: "com.gmailpushbridge.oauth.loopback")
+    private let expectedState: String
     private var listener: NWListener?
     private var callbackContinuation: CheckedContinuation<[String: String], Error>?
 
-    init() throws {}
+    init(expectedState: String) throws {
+        self.expectedState = expectedState
+    }
 
     func start() async throws -> UInt16 {
         let parameters = NWParameters.tcp
@@ -349,6 +400,10 @@ private actor LoopbackCallbackServer {
     }
 
     func stop() {
+        if let cont = callbackContinuation {
+            callbackContinuation = nil
+            cont.resume(throwing: GoogleOAuthError.invalidCallback("OAuth callback listener stopped."))
+        }
         listener?.cancel()
         listener = nil
     }
@@ -365,11 +420,25 @@ private actor LoopbackCallbackServer {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, _, _ in
             guard let self else { return }
             let requestText = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-            let queryParams = Self.extractQueryParameters(fromHTTPRequest: requestText)
+            let (requestPath, queryParams) = Self.extractRequestPathAndQuery(fromHTTPRequest: requestText)
 
-            // Ignore favicon requests
-            guard requestText.contains("/oauth2callback") else {
+            // Ignore favicon or unrelated requests
+            guard requestPath == "/oauth2callback" else {
                 connection.cancel()
+                return
+            }
+
+            let hasCodeOrError = (queryParams["code"]?.isEmpty == false) || (queryParams["error"]?.isEmpty == false)
+            guard queryParams["state"] == self.expectedState, hasCodeOrError else {
+                let badBody = """
+                <!DOCTYPE html><html><head><meta charset="utf-8"><title>Invalid OAuth Callback</title></head>
+                <body style="font-family:-apple-system,sans-serif;padding:40px;text-align:center;">
+                <h2>Invalid OAuth Callback</h2><p>State mismatch or missing parameters; waiting for valid sign-in.</p></body></html>
+                """
+                let badResponse = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(badBody.utf8.count)\r\nConnection: close\r\n\r\n\(badBody)"
+                connection.send(content: Data(badResponse.utf8), completion: .contentProcessed { _ in
+                    connection.cancel()
+                })
                 return
             }
 
@@ -406,23 +475,22 @@ private actor LoopbackCallbackServer {
         }
     }
 
-    private static func extractQueryParameters(fromHTTPRequest request: String) -> [String: String] {
+    private static func extractRequestPathAndQuery(fromHTTPRequest request: String) -> (String, [String: String]) {
         guard let firstLine = request.split(separator: "\r\n").first ?? request.split(separator: "\n").first else {
-            return [:]
+            return ("", [:])
         }
         let parts = firstLine.split(separator: " ")
-        guard parts.count >= 2 else { return [:] }
+        guard parts.count >= 2 else { return ("", [:]) }
         let pathAndQuery = String(parts[1])
-        guard let components = URLComponents(string: "http://127.0.0.1\(pathAndQuery)"),
-              let items = components.queryItems else {
-            return [:]
+        guard let components = URLComponents(string: "http://127.0.0.1\(pathAndQuery)") else {
+            return ("", [:])
         }
         var dict: [String: String] = [:]
-        for item in items {
+        for item in components.queryItems ?? [] {
             if let value = item.value {
                 dict[item.name] = value
             }
         }
-        return dict
+        return (components.path, dict)
     }
 }

@@ -18,6 +18,18 @@ enum GmailAuthMethod: String, CaseIterable, Identifiable, Sendable {
 
 @MainActor
 final class AppSettings: ObservableObject {
+    nonisolated static let defaultGmailIMAPHost = "imap.gmail.com"
+    nonisolated static let defaultGmailIMAPPort: UInt16 = 993
+    nonisolated static let allowedGmailIMAPHosts: Set<String> = [
+        "imap.gmail.com",
+        "imap.googlemail.com"
+    ]
+
+    nonisolated static func isAllowedGmailIMAPEndpoint(host: String, port: UInt16) -> Bool {
+        let normalizedHost = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return allowedGmailIMAPHosts.contains(normalizedHost) && port == defaultGmailIMAPPort
+    }
+
     private let defaults = UserDefaults.standard
 
     private enum Keys {
@@ -122,9 +134,21 @@ final class AppSettings: ObservableObject {
         let savedRenewal = defaults.integer(forKey: Keys.idleRenewalMinutes)
         self.idleRenewalMinutes = savedRenewal > 0 ? savedRenewal : 14
 
-        self.imapHost = defaults.string(forKey: Keys.imapHost) ?? "imap.gmail.com"
+        let candidateHost = defaults.string(forKey: Keys.imapHost) ?? Self.defaultGmailIMAPHost
         let savedPort = defaults.integer(forKey: Keys.imapPort)
-        self.imapPort = savedPort > 0 ? UInt16(savedPort) : 993
+        let candidatePort = (savedPort > 0 && savedPort <= Int(UInt16.max))
+            ? UInt16(savedPort)
+            : Self.defaultGmailIMAPPort
+
+        if Self.isAllowedGmailIMAPEndpoint(host: candidateHost, port: candidatePort) {
+            self.imapHost = candidateHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            self.imapPort = candidatePort
+        } else {
+            self.imapHost = Self.defaultGmailIMAPHost
+            self.imapPort = Self.defaultGmailIMAPPort
+            defaults.set(Self.defaultGmailIMAPHost, forKey: Keys.imapHost)
+            defaults.set(Int(Self.defaultGmailIMAPPort), forKey: Keys.imapPort)
+        }
         self.watchedMailbox = defaults.string(forKey: Keys.watchedMailbox) ?? "INBOX"
 
         if defaults.object(forKey: Keys.automaticallyCheckForUpdates) == nil {
@@ -145,6 +169,12 @@ final class AppSettings: ObservableObject {
         let email = gmailAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !email.isEmpty else { return false }
         return KeychainStore.loadOAuthTokens(for: email) != nil
+    }
+
+    var hasAppPassword: Bool {
+        let email = gmailAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !email.isEmpty else { return false }
+        return sanitizedAppPassword() != nil
     }
 
     var isConfigured: Bool {
