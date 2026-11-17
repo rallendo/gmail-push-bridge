@@ -370,11 +370,19 @@ struct SettingsView: View {
 
                 Toggle("Start automatically at login (LaunchAgent)", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { newValue in
+                        guard newValue != LaunchAgentManager.isEnabled else { return }
                         do {
                             try LaunchAgentManager.setEnabled(newValue)
                             coordinator.appendLog(newValue ? "Enabled LaunchAgent at login." : "Disabled LaunchAgent at login.")
                         } catch {
+                            launchAtLogin = LaunchAgentManager.isEnabled
                             coordinator.appendLog("Failed to update LaunchAgent: \(error.localizedDescription)")
+                            let alert = NSAlert()
+                            alert.messageText = "Cannot Enable Start at Login"
+                            alert.informativeText = error.localizedDescription
+                            alert.alertStyle = .warning
+                            alert.addButton(withTitle: "OK")
+                            alert.runModal()
                         }
                     }
             }

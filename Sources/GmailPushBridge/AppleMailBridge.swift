@@ -23,16 +23,28 @@ actor AppleMailBridge {
         }
     }
 
+    nonisolated static func sanitizeAccountName(_ input: String) -> String {
+        let stripped = String(input.unicodeScalars.filter { scalar in
+            scalar.value >= 0x20 && scalar.value != 0x7F
+        })
+        return stripped.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Queries Apple Mail for configured account names (e.g., ["iCloud", "Google"]).
     func fetchAccountNames() async throws -> [String] {
         let script = """
         tell application "Mail"
-            get name of every account
+            set accountNames to name of every account
         end tell
+        set prevDelimiters to AppleScript's text item delimiters
+        set AppleScript's text item delimiters to linefeed
+        set joinedNames to accountNames as text
+        set AppleScript's text item delimiters to prevDelimiters
+        return joinedNames
         """
         let output = try await runOsascript(script)
         return output
-            .split(separator: ",")
+            .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
     }
@@ -47,44 +59,50 @@ actor AppleMailBridge {
             return MailFetchResult(outcome: .skippedMailNotRunning, timestamp: Date())
         }
 
-        let trimmedAccount = accountName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let escapedAccount = Self.escapeAppleScriptString(trimmedAccount)
+        let sanitizedAccount = Self.sanitizeAccountName(accountName)
 
         let script: String
-        if trimmedAccount.isEmpty {
+        let arguments: [String]
+        if sanitizedAccount.isEmpty {
             script = """
             tell application "Mail"
                 check for new mail
                 return "ALL"
             end tell
             """
+            arguments = []
         } else {
-            let syncLine = includeSynchronize ? "synchronize with targetAccount" : ""
-            let fallbackBlock = fallbackToAllAccounts
-                ? """
-                check for new mail
-                return "FALLBACK_ALL"
-                """
-                : """
-                error "Account '\(escapedAccount)' not found in Apple Mail"
-                """
-
             script = """
-            tell application "Mail"
-                if (exists account "\(escapedAccount)") then
-                    set targetAccount to account "\(escapedAccount)"
-                    check for new mail for targetAccount
-                    \(syncLine)
-                    return "ACCOUNT:\(escapedAccount)"
-                else
-                    \(fallbackBlock)
-                end if
-            end tell
+            on run argv
+                set targetName to item 1 of argv
+                set shouldFallback to (item 2 of argv is "true")
+                set shouldSync to (item 3 of argv is "true")
+                tell application "Mail"
+                    if (exists account targetName) then
+                        set targetAccount to account targetName
+                        check for new mail for targetAccount
+                        if shouldSync then
+                            synchronize with targetAccount
+                        end if
+                        return "ACCOUNT:" & targetName
+                    else if shouldFallback then
+                        check for new mail
+                        return "FALLBACK_ALL"
+                    else
+                        error "Account '" & targetName & "' not found in Apple Mail"
+                    end if
+                end tell
+            end run
             """
+            arguments = [
+                sanitizedAccount,
+                fallbackToAllAccounts ? "true" : "false",
+                includeSynchronize ? "true" : "false"
+            ]
         }
 
         do {
-            let response = try await runOsascript(script)
+            let response = try await runOsascript(script, arguments: arguments)
             if response.hasPrefix("ACCOUNT:") {
                 let matched = String(response.dropFirst("ACCOUNT:".count))
                 return MailFetchResult(outcome: .triggeredAccount(matched), timestamp: Date())
@@ -96,11 +114,11 @@ actor AppleMailBridge {
         }
     }
 
-    private func runOsascript(_ script: String) async throws -> String {
+    private func runOsascript(_ script: String, arguments: [String] = []) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", script]
+            process.arguments = ["-e", script] + arguments
 
             let stdoutPipe = Pipe()
             let stderrPipe = Pipe()
@@ -135,11 +153,5 @@ actor AppleMailBridge {
                 continuation.resume(throwing: error)
             }
         }
-    }
-
-    private static func escapeAppleScriptString(_ input: String) -> String {
-        input
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
     }
 }

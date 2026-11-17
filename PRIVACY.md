@@ -47,7 +47,7 @@ Specifically:
 
 - **Retention:** All OAuth tokens and local preferences are retained locally on your Mac only for as long as you keep the Application configured.
 - **Immediate Deletion / Revocation:**
-  - You can delete all stored tokens and credentials at any time by clicking **Disconnect / Reset** in the Application's Settings window. This immediately purges all keys from your macOS Keychain.
+  - You can delete stored credentials at any time in the Application's Settings window by clicking **Sign Out** (which removes OAuth tokens from your macOS Keychain and triggers best-effort token revocation via Google's revocation endpoint) or **Remove App Password** (which removes your stored App Password from Keychain).
   - You can revoke the Application's access at any time from your Google Account security dashboard at [https://myaccount.google.com/permissions](https://myaccount.google.com/permissions).
   - Uninstalling the Application and deleting Keychain entries removes all traces of the Application from your device.
 
@@ -56,8 +56,8 @@ Specifically:
 ## 5. Security
 
 The Application uses industry-standard security practices:
-- **Transport Security:** All network communications with Google IMAP servers use TLS 1.3/1.2 encryption.
-- **Keychain Access Control:** Sensitive tokens are stored using macOS Keychain Services (`kSecClassGenericPassword`), protected by macOS hardware-backed secure storage and system authentication.
+- **Transport Security:** All network communications with Google IMAP servers use TLS 1.3/1.2 encryption (`imap.gmail.com` / `imap.googlemail.com` on port `993`).
+- **Keychain Access Control:** Sensitive tokens and App Passwords are stored locally via macOS Keychain Services (`kSecClassGenericPassword`, service `com.gmailpushbridge.app`, accessibility `kSecAttrAccessibleAfterFirstUnlock`) in your user login keychain.
 
 ---
 

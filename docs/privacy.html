@@ -166,7 +166,7 @@
     <p>Gmail Push Bridge is designed strictly to operate locally on your Apple Mac:</p>
     <ul>
       <li><strong>Direct IMAP Connection:</strong> The Application connects directly from your Mac to Google's official IMAP mail servers (<code>imap.gmail.com:993</code>) via TLS. We do not operate any intermediate servers, cloud relays, web services, or databases.</li>
-      <li><strong>Hardware Keychain Storage:</strong> OAuth tokens (access tokens, refresh tokens) and App Passwords are stored exclusively in your local macOS Keychain under access group <code>com.gmailpushbridge.app</code>. They never leave your device.</li>
+      <li><strong>Local Keychain Storage:</strong> OAuth tokens (access tokens, refresh tokens) and App Passwords are stored exclusively in your local macOS Keychain under service <code>com.gmailpushbridge.app</code> (<code>kSecClassGenericPassword</code>). They never leave your device.</li>
       <li><strong>Zero Tracking or Analytics:</strong> The Application does not contain any third-party tracking SDKs, analytics, crash-reporting telemetry, or advertising libraries.</li>
     </ul>
 
@@ -198,7 +198,7 @@
     <p>Because all data resides exclusively on your local device:</p>
     <ul>
       <li>You can revoke the Application's access at any time through your Google Security settings at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">myaccount.google.com/permissions</a>.</li>
-      <li>Clicking <strong>Disconnect / Reset</strong> inside the Application immediately purges all OAuth tokens and credentials from your macOS Keychain.</li>
+      <li>Clicking <strong>Sign Out</strong> (for OAuth 2.0, which also requests revocation at Google) or <strong>Remove App Password</strong> inside the Application immediately purges those credentials from your macOS Keychain.</li>
       <li>Deleting the application removes all application binaries and configuration from your Mac.</li>
     </ul>
 
