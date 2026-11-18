@@ -313,11 +313,11 @@ actor GoogleOAuthManager {
 
     // MARK: - PKCE Helpers
 
-    private static func generateCodeVerifier() -> String {
+    nonisolated static func generateCodeVerifier() -> String {
         generateRandomURLSafeString(byteCount: 32)
     }
 
-    private static func codeChallenge(for verifier: String) -> String {
+    nonisolated static func codeChallenge(for verifier: String) -> String {
         let digest = SHA256.hash(data: Data(verifier.utf8))
         return Data(digest)
             .base64EncodedString()
@@ -326,7 +326,7 @@ actor GoogleOAuthManager {
             .replacingOccurrences(of: "=", with: "")
     }
 
-    private static func generateRandomURLSafeString(byteCount: Int) -> String {
+    nonisolated static func generateRandomURLSafeString(byteCount: Int) -> String {
         var bytes = [UInt8](repeating: 0, count: byteCount)
         _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
         return Data(bytes)
@@ -339,7 +339,7 @@ actor GoogleOAuthManager {
 
 // MARK: - Ephemeral Loopback Callback Server (127.0.0.1)
 
-private actor LoopbackCallbackServer {
+actor LoopbackCallbackServer {
     private let queue = DispatchQueue(label: "com.gmailpushbridge.oauth.loopback")
     private let expectedState: String
     private var listener: NWListener?
@@ -475,7 +475,7 @@ private actor LoopbackCallbackServer {
         }
     }
 
-    private static func extractRequestPathAndQuery(fromHTTPRequest request: String) -> (String, [String: String]) {
+    nonisolated static func extractRequestPathAndQuery(fromHTTPRequest request: String) -> (String, [String: String]) {
         guard let firstLine = request.split(separator: "\r\n").first ?? request.split(separator: "\n").first else {
             return ("", [:])
         }

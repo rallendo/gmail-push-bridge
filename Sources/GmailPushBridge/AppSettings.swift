@@ -30,7 +30,8 @@ final class AppSettings: ObservableObject {
         return allowedGmailIMAPHosts.contains(normalizedHost) && port == defaultGmailIMAPPort
     }
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
+    private let startUpdateChecks: Bool
 
     private enum Keys {
         static let authMethod = "authMethod"
@@ -104,6 +105,7 @@ final class AppSettings: ObservableObject {
     @Published var automaticallyCheckForUpdates: Bool {
         didSet {
             defaults.set(automaticallyCheckForUpdates, forKey: Keys.automaticallyCheckForUpdates)
+            guard startUpdateChecks else { return }
             if automaticallyCheckForUpdates {
                 UpdateManager.shared.startPeriodicChecks(settings: self)
             } else {
@@ -112,7 +114,9 @@ final class AppSettings: ObservableObject {
         }
     }
 
-    init() {
+    init(defaults: UserDefaults = .standard, startUpdateChecks: Bool = true) {
+        self.defaults = defaults
+        self.startUpdateChecks = startUpdateChecks
         if let rawMethod = defaults.string(forKey: Keys.authMethod),
            let parsed = GmailAuthMethod(rawValue: rawMethod) {
             self.authMethod = parsed

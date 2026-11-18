@@ -27,7 +27,14 @@ Supports both **Sign in with Google (OAuth 2.0 + PKCE / Passkey via `XOAUTH2`)**
 
 ## Quick Start
 
-### 1. Build the `.app` Bundle
+### 1. Run Unit Tests & Build the `.app` Bundle
+Run the pre-release test suite and release build verification:
+```zsh
+./scripts/run-tests.sh
+```
+*(Or run `swift test` directly.)*
+
+Package the `.app` bundle:
 ```zsh
 ./scripts/build-app.sh
 ```

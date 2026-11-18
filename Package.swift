@@ -13,6 +13,11 @@ let package = Package(
         .executableTarget(
             name: "GmailPushBridge",
             path: "Sources/GmailPushBridge"
+        ),
+        .testTarget(
+            name: "GmailPushBridgeTests",
+            dependencies: ["GmailPushBridge"],
+            path: "Tests/GmailPushBridgeTests"
         )
     ]
 )
