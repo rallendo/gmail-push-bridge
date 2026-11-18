@@ -39,6 +39,7 @@ enum LowPowerModeBehavior: String, CaseIterable, Identifiable, Sendable {
 final class AppSettings: ObservableObject {
     nonisolated static let defaultGmailIMAPHost = "imap.gmail.com"
     nonisolated static let defaultGmailIMAPPort: UInt16 = 993
+    nonisolated static let defaultIdleRenewalMinutes: Int = 25
     nonisolated static let lowPowerDebounceSeconds: Double = 8.0
     nonisolated static let lowPowerIdleRenewalMinutes: Int = 25
     nonisolated static let allowedGmailIMAPHosts: Set<String> = [
@@ -188,7 +189,7 @@ final class AppSettings: ObservableObject {
         self.debounceSeconds = savedDebounce > 0 ? savedDebounce : 2.0
 
         let savedRenewal = defaults.integer(forKey: Keys.idleRenewalMinutes)
-        self.idleRenewalMinutes = savedRenewal > 0 ? savedRenewal : 14
+        self.idleRenewalMinutes = savedRenewal > 0 ? savedRenewal : Self.defaultIdleRenewalMinutes
 
         let candidateHost = defaults.string(forKey: Keys.imapHost) ?? Self.defaultGmailIMAPHost
         let savedPort = defaults.integer(forKey: Keys.imapPort)

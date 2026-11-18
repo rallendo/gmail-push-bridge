@@ -3,6 +3,7 @@ import Foundation
 import Network
 
 final class SystemMonitor: @unchecked Sendable {
+    private let onSystemSleep: @Sendable () -> Void
     private let onSystemWake: @Sendable () -> Void
     private let onNetworkRestored: @Sendable () -> Void
     private let onMailLaunched: @Sendable () -> Void
@@ -21,12 +22,14 @@ final class SystemMonitor: @unchecked Sendable {
     private var powerStateObserver: NSObjectProtocol?
 
     init(
+        onSystemSleep: @escaping @Sendable () -> Void = {},
         onSystemWake: @escaping @Sendable () -> Void,
         onNetworkRestored: @escaping @Sendable () -> Void,
         onMailLaunched: @escaping @Sendable () -> Void = {},
         onMailTerminated: @escaping @Sendable () -> Void = {},
         onLowPowerModeChanged: @escaping @Sendable (Bool) -> Void = { _ in }
     ) {
+        self.onSystemSleep = onSystemSleep
         self.onSystemWake = onSystemWake
         self.onNetworkRestored = onNetworkRestored
         self.onMailLaunched = onMailLaunched
@@ -36,6 +39,14 @@ final class SystemMonitor: @unchecked Sendable {
 
     func start() {
         let nc = NSWorkspace.shared.notificationCenter
+        sleepObserver = nc.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [onSystemSleep] _ in
+            onSystemSleep()
+        }
+
         wakeObserver = nc.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,

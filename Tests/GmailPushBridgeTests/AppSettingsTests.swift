@@ -49,7 +49,7 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(settings.autoDisconnectWhenMailClosed)
         XCTAssertEqual(settings.lowPowerModeBehavior, .reduceActivity)
         XCTAssertEqual(settings.debounceSeconds, 2.0)
-        XCTAssertEqual(settings.idleRenewalMinutes, 14)
+        XCTAssertEqual(settings.idleRenewalMinutes, 25)
         XCTAssertEqual(settings.imapHost, AppSettings.defaultGmailIMAPHost)
         XCTAssertEqual(settings.imapPort, AppSettings.defaultGmailIMAPPort)
         XCTAssertEqual(settings.watchedMailbox, "INBOX")
@@ -112,7 +112,7 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: "imapHost"), AppSettings.defaultGmailIMAPHost)
         XCTAssertEqual(defaults.integer(forKey: "imapPort"), Int(AppSettings.defaultGmailIMAPPort))
         XCTAssertEqual(settings.debounceSeconds, 2.0)
-        XCTAssertEqual(settings.idleRenewalMinutes, 14)
+        XCTAssertEqual(settings.idleRenewalMinutes, 25)
     }
 
     func testNormalizesAllowedGooglemailHostOnInit() {

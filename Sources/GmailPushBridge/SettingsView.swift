@@ -569,39 +569,29 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 4) {
-                            ForEach(coordinator.activityLog) { entry in
-                                HStack(alignment: .top, spacing: 8) {
-                                    Text(Self.timeFormatter.string(from: entry.timestamp))
-                                        .font(.system(.caption, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                    Text(entry.message)
-                                        .font(.system(.caption, design: .monospaced))
-                                        .textSelection(.enabled)
-                                }
-                                .id(entry.id)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(8)
-                    }
-                    .frame(height: 120)
-                    .background(Color(nsColor: .textBackgroundColor))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
-                    )
-                    .onChange(of: coordinator.activityLog.count) { _ in
-                        if let last = coordinator.activityLog.last {
-                            withAnimation {
-                                proxy.scrollTo(last.id, anchor: .bottom)
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        ForEach(coordinator.activityLog) { entry in
+                            HStack(alignment: .top, spacing: 8) {
+                                Text(Self.timeFormatter.string(from: entry.timestamp))
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                Text(entry.message)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .textSelection(.enabled)
                             }
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
                 }
+                .frame(height: 120)
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                )
             }
             .padding(.vertical, 4)
         } label: {

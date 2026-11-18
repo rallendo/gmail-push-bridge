@@ -2,9 +2,13 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class SettingsWindowController {
+final class SettingsWindowController: NSObject, NSWindowDelegate {
     static let shared = SettingsWindowController()
     private var window: NSWindow?
+
+    private override init() {
+        super.init()
+    }
 
     func show(coordinator: BridgeCoordinator) {
         if let existing = window {
@@ -35,10 +39,18 @@ final class SettingsWindowController {
         }
         win.setFrameAutosaveName(autosaveName)
         win.isReleasedWhenClosed = false
+        win.delegate = self
 
         self.window = win
         NSApp.activate(ignoringOtherApps: true)
         win.makeKeyAndOrderFront(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        if (notification.object as? NSWindow) === window {
+            window?.contentViewController = nil
+            window = nil
+        }
     }
 }
 

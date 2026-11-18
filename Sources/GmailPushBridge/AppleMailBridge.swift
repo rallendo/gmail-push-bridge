@@ -136,6 +136,7 @@ actor AppleMailBridge {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
             process.arguments = ["-e", script] + arguments
+            process.qualityOfService = .utility
 
             let stdoutPipe = Pipe()
             let stderrPipe = Pipe()

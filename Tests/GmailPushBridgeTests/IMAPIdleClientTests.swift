@@ -272,4 +272,10 @@ final class IMAPIdleClientTests: XCTestCase {
             return false
         })
     }
+
+    func testBatteryFriendlySocketAndBackoffConstants() {
+        XCTAssertEqual(IMAPIdleClient.tcpKeepaliveIdleSeconds, 600)
+        XCTAssertEqual(IMAPIdleClient.tcpKeepaliveIntervalSeconds, 30)
+        XCTAssertEqual(IMAPIdleClient.maxReconnectDelaySeconds, 300)
+    }
 }

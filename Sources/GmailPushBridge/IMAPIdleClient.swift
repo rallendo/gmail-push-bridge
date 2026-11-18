@@ -63,6 +63,9 @@ struct IMAPConfiguration: Sendable {
 
 final class IMAPIdleClient: @unchecked Sendable {
     nonisolated static let maxReceiveBufferBytes = 65_536
+    nonisolated static let tcpKeepaliveIdleSeconds = 600
+    nonisolated static let tcpKeepaliveIntervalSeconds = 30
+    nonisolated static let maxReconnectDelaySeconds = 300
 
     private let queue = DispatchQueue(label: "com.gmailpushbridge.imap", qos: .utility)
     private let eventHandler: @Sendable (IMAPClientEvent) -> Void
@@ -194,8 +197,8 @@ final class IMAPIdleClient: @unchecked Sendable {
 
         let tcpOptions = NWProtocolTCP.Options()
         tcpOptions.enableKeepalive = true
-        tcpOptions.keepaliveIdle = 60
-        tcpOptions.keepaliveInterval = 15
+        tcpOptions.keepaliveIdle = Self.tcpKeepaliveIdleSeconds
+        tcpOptions.keepaliveInterval = Self.tcpKeepaliveIntervalSeconds
         tcpOptions.keepaliveCount = 3
         tcpOptions.connectionTimeout = 15
 
@@ -506,7 +509,7 @@ final class IMAPIdleClient: @unchecked Sendable {
         idleRenewalTimer?.cancel()
         let clampedMinutes = max(2, min(minutes, 25))
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + .seconds(clampedMinutes * 60))
+        timer.schedule(deadline: .now() + .seconds(clampedMinutes * 60), leeway: .seconds(30))
         timer.setEventHandler { [weak self] in
             self?.renewIdle()
         }
@@ -517,7 +520,7 @@ final class IMAPIdleClient: @unchecked Sendable {
     private func startWatchdog(seconds: Int, description: String) {
         commandWatchdogTimer?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + .seconds(seconds))
+        timer.schedule(deadline: .now() + .seconds(seconds), leeway: .seconds(2))
         timer.setEventHandler { [weak self] in
             guard let self, !self.isStopped else { return }
             self.eventHandler(.log("Timed out waiting for \(description) (\(seconds)s)."))
@@ -554,7 +557,7 @@ final class IMAPIdleClient: @unchecked Sendable {
         reconnectWorkItem?.cancel()
 
         reconnectAttempt += 1
-        let delay = min(30, Int(pow(2.0, Double(min(reconnectAttempt, 5)))))
+        let delay = min(Self.maxReconnectDelaySeconds, Int(pow(2.0, Double(min(reconnectAttempt, 9)))))
         eventHandler(.stateChanged(.reconnecting(attempt: reconnectAttempt, delaySeconds: delay)))
         eventHandler(.log("Scheduling reconnect #\(reconnectAttempt) in \(delay)s (\(reason))"))
 

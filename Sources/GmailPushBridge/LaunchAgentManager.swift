@@ -73,7 +73,7 @@ struct LaunchAgentManager {
                 "ProgramArguments": [execURL.path],
                 "RunAtLoad": true,
                 "KeepAlive": true,
-                "ProcessType": "Interactive"
+                "ProcessType": "Standard"
             ]
 
             let data = try PropertyListSerialization.data(

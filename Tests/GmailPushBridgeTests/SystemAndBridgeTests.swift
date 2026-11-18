@@ -155,4 +155,28 @@ final class SystemAndBridgeTests: XCTestCase {
         coordinator.handleLowPowerModeChanged(false)
         XCTAssertFalse(coordinator.isPausedForLowPowerMode)
     }
+
+    @MainActor
+    func testBridgeCoordinatorSleepAndWakeTransitions() {
+        let suiteName = "com.gmailpushbridge.sleepwake.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        addTeardownBlock {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let settings = AppSettings(defaults: defaults, startUpdateChecks: false)
+        let coordinator = BridgeCoordinator(settings: settings, enableBackgroundMonitors: false)
+
+        XCTAssertFalse(coordinator.isSleeping)
+        coordinator.handleIMAPEvent(.stateChanged(.idling(mailbox: "INBOX", existsCount: 3)))
+        XCTAssertEqual(coordinator.connectionState, .idling(mailbox: "INBOX", existsCount: 3))
+
+        coordinator.handleSystemSleep()
+        XCTAssertTrue(coordinator.isSleeping)
+        XCTAssertEqual(coordinator.connectionState, .disconnected)
+
+        coordinator.handleSystemWake()
+        XCTAssertFalse(coordinator.isSleeping)
+    }
 }

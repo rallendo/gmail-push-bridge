@@ -91,13 +91,15 @@ final class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegat
             self.checkForUpdates(isUserInitiated: false)
         }
 
-        // Check every 24 hours (86,400 seconds)
-        periodicTimer = Timer.scheduledTimer(withTimeInterval: 86_400, repeats: true) { [weak self] _ in
+        // Check every 24 hours (86,400 seconds) with generous tolerance for timer coalescing
+        let timer = Timer.scheduledTimer(withTimeInterval: 86_400, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self = self, settings.automaticallyCheckForUpdates else { return }
                 self.checkForUpdates(isUserInitiated: false)
             }
         }
+        timer.tolerance = 3_600
+        periodicTimer = timer
     }
 
     func stopPeriodicChecks() {
