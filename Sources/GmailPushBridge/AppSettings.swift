@@ -39,6 +39,7 @@ final class AppSettings: ObservableObject {
         static let appleMailAccountName = "appleMailAccountName"
         static let checkAllAccountsFallback = "checkAllAccountsFallback"
         static let runSynchronizeInAdditionToCheck = "runSynchronizeInAdditionToCheck"
+        static let autoDisconnectWhenMailClosed = "autoDisconnectWhenMailClosed"
         static let debounceSeconds = "debounceSeconds"
         static let idleRenewalMinutes = "idleRenewalMinutes"
         static let imapHost = "imapHost"
@@ -69,6 +70,10 @@ final class AppSettings: ObservableObject {
 
     @Published var runSynchronizeInAdditionToCheck: Bool {
         didSet { defaults.set(runSynchronizeInAdditionToCheck, forKey: Keys.runSynchronizeInAdditionToCheck) }
+    }
+
+    @Published var autoDisconnectWhenMailClosed: Bool {
+        didSet { defaults.set(autoDisconnectWhenMailClosed, forKey: Keys.autoDisconnectWhenMailClosed) }
     }
 
     @Published var debounceSeconds: Double {
@@ -127,6 +132,11 @@ final class AppSettings: ObservableObject {
             self.runSynchronizeInAdditionToCheck = true
         } else {
             self.runSynchronizeInAdditionToCheck = defaults.bool(forKey: Keys.runSynchronizeInAdditionToCheck)
+        }
+        if defaults.object(forKey: Keys.autoDisconnectWhenMailClosed) == nil {
+            self.autoDisconnectWhenMailClosed = true
+        } else {
+            self.autoDisconnectWhenMailClosed = defaults.bool(forKey: Keys.autoDisconnectWhenMailClosed)
         }
         let savedDebounce = defaults.double(forKey: Keys.debounceSeconds)
         self.debounceSeconds = savedDebounce > 0 ? savedDebounce : 2.0

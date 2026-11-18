@@ -57,7 +57,7 @@ struct SettingsView: View {
                 .frame(width: 10, height: 10)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(coordinator.isPaused ? "Paused" : coordinator.connectionState.summaryText)
+                Text(coordinator.statusSummaryText)
                     .font(.subheadline.weight(.semibold))
                 Text(coordinator.lastTriggerSummary)
                     .font(.caption)
@@ -341,6 +341,10 @@ struct SettingsView: View {
 
                 Toggle("Fallback to checking all accounts if account name isn't found", isOn: $settings.checkAllAccountsFallback)
                 Toggle("Also run 'synchronize' on account (syncs flags & folders)", isOn: $settings.runSynchronizeInAdditionToCheck)
+                Toggle("Automatically pause IMAP IDLE when Apple Mail is closed", isOn: $settings.autoDisconnectWhenMailClosed)
+                    .onChange(of: settings.autoDisconnectWhenMailClosed) { newValue in
+                        coordinator.handleAutoDisconnectSettingChanged(newValue)
+                    }
             }
             .padding(.vertical, 4)
         } label: {
@@ -612,6 +616,7 @@ struct SettingsView: View {
 
     private var statusColor: Color {
         if coordinator.isPaused { return .orange }
+        if coordinator.isWaitingForMail { return .blue.opacity(0.75) }
         switch coordinator.connectionState {
         case .idling:
             return .green

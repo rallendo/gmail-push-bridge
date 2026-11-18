@@ -14,7 +14,7 @@ struct MailFetchResult: Sendable {
 }
 
 actor AppleMailBridge {
-    private static let mailBundleIdentifier = "com.apple.mail"
+    nonisolated static let mailBundleIdentifier = "com.apple.mail"
 
     /// Checks whether Apple Mail is currently running so we never unexpectedly launch Mail.app.
     nonisolated static func isMailRunning() -> Bool {

@@ -59,7 +59,7 @@ struct GmailPushBridgeApp: App {
             MenuBarContentView(coordinator: coordinator)
         } label: {
             Image(systemName: coordinator.menuBarIconName)
-                .help("Gmail Push Bridge: \(coordinator.connectionState.summaryText)")
+                .help("Gmail Push Bridge: \(coordinator.statusSummaryText)")
         }
     }
 }
@@ -76,7 +76,7 @@ struct MenuBarContentView: View {
     }()
 
     var body: some View {
-        Text(coordinator.isPaused ? "Status: Paused" : coordinator.connectionState.summaryText)
+        Text("Status: \(coordinator.statusSummaryText)")
         Text("Last Push: \(coordinator.lastTriggerSummary)")
 
         Divider()

@@ -14,6 +14,7 @@ final class BridgeCoordinator: ObservableObject {
 
     @Published private(set) var connectionState: IMAPConnectionState = .disconnected
     @Published private(set) var isPaused: Bool = false
+    @Published private(set) var isWaitingForMail: Bool = false
     @Published private(set) var isSigningInWithGoogle: Bool = false
     @Published private(set) var lastTriggerDate: Date?
     @Published private(set) var lastTriggerSummary: String = "No push triggered yet"
@@ -51,7 +52,11 @@ final class BridgeCoordinator: ObservableObject {
         systemMonitor = SystemMonitor(
             onSystemWake: { [weak self] in
                 Task { @MainActor [weak self] in
-                    guard let self, !self.isPaused, self.settings.isConfigured else { return }
+                    guard let self, !self.isPaused, !self.isWaitingForMail, self.settings.isConfigured else { return }
+                    if self.settings.autoDisconnectWhenMailClosed && !AppleMailBridge.isMailRunning() {
+                        self.enterMailClosedStandby(logMessage: "Apple Mail is closed after wake — staying in standby.")
+                        return
+                    }
                     self.appendLog("Mac woke from sleep — reconnecting IMAP IDLE & checking mail.")
                     self.imapClient?.forceReconnect(reason: "Mac woke from sleep")
                     self.scheduleDebouncedFetch(reason: "Wake from sleep", delayOverride: 3.0)
@@ -59,9 +64,22 @@ final class BridgeCoordinator: ObservableObject {
             },
             onNetworkRestored: { [weak self] in
                 Task { @MainActor [weak self] in
-                    guard let self, !self.isPaused, self.settings.isConfigured else { return }
+                    guard let self, !self.isPaused, !self.isWaitingForMail, self.settings.isConfigured else { return }
+                    if self.settings.autoDisconnectWhenMailClosed && !AppleMailBridge.isMailRunning() {
+                        return
+                    }
                     self.appendLog("Network path changed/restored — refreshing IMAP IDLE session.")
                     self.imapClient?.forceReconnect(reason: "Network path updated")
+                }
+            },
+            onMailLaunched: { [weak self] in
+                Task { @MainActor [weak self] in
+                    self?.handleMailLaunched()
+                }
+            },
+            onMailTerminated: { [weak self] in
+                Task { @MainActor [weak self] in
+                    self?.handleMailTerminated()
                 }
             }
         )
@@ -88,6 +106,7 @@ final class BridgeCoordinator: ObservableObject {
         let email = settings.gmailAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         let existingTokens = email.isEmpty ? nil : KeychainStore.loadOAuthTokens(for: email)
 
+        isWaitingForMail = false
         imapClient?.stop()
         connectionState = .disconnected
         if !email.isEmpty {
@@ -106,6 +125,7 @@ final class BridgeCoordinator: ObservableObject {
 
     func removeAppPassword() {
         let email = settings.gmailAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        isWaitingForMail = false
         imapClient?.stop()
         connectionState = .disconnected
         if !email.isEmpty {
@@ -145,6 +165,12 @@ final class BridgeCoordinator: ObservableObject {
         }
 
         isPaused = false
+        if settings.autoDisconnectWhenMailClosed && !AppleMailBridge.isMailRunning() {
+            enterMailClosedStandby(logMessage: "Waiting for Apple Mail to launch (auto-disconnect when Mail is closed is enabled).")
+            return
+        }
+
+        isWaitingForMail = false
         let config = IMAPConfiguration(
             host: settings.imapHost,
             port: settings.imapPort,
@@ -158,9 +184,52 @@ final class BridgeCoordinator: ObservableObject {
 
     func pauseMonitoring() {
         isPaused = true
+        isWaitingForMail = false
         debounceTask?.cancel()
         imapClient?.stop()
         appendLog("Monitoring paused by user.")
+    }
+
+    func handleAutoDisconnectSettingChanged(_ enabled: Bool) {
+        guard settings.isConfigured, !isPaused else {
+            if !enabled {
+                isWaitingForMail = false
+            }
+            return
+        }
+
+        if enabled && !AppleMailBridge.isMailRunning() {
+            if !isWaitingForMail {
+                enterMailClosedStandby(logMessage: "Auto-disconnect enabled while Apple Mail is closed — pausing IMAP IDLE.")
+            }
+        } else if !enabled && isWaitingForMail {
+            isWaitingForMail = false
+            appendLog("Auto-disconnect disabled — connecting IMAP IDLE now.")
+            startMonitoring()
+        }
+    }
+
+    private func enterMailClosedStandby(logMessage: String) {
+        debounceTask?.cancel()
+        isWaitingForMail = true
+        imapClient?.stop()
+        connectionState = .disconnected
+        appendLog(logMessage)
+    }
+
+    private func handleMailTerminated() {
+        guard settings.autoDisconnectWhenMailClosed, !isPaused, settings.isConfigured else { return }
+        enterMailClosedStandby(logMessage: "Apple Mail quit — pausing IMAP IDLE until Mail launches.")
+    }
+
+    private func handleMailLaunched() {
+        guard !isPaused, settings.isConfigured else { return }
+        if isWaitingForMail || connectionState == .disconnected {
+            isWaitingForMail = false
+            appendLog("Apple Mail launched — reconnecting IMAP IDLE & checking mail.")
+            startMonitoring()
+            scheduleDebouncedFetch(reason: "Apple Mail launched", delayOverride: 2.5)
+        }
     }
 
     func togglePause() {
@@ -269,9 +338,22 @@ final class BridgeCoordinator: ObservableObject {
         }
     }
 
+    var statusSummaryText: String {
+        if isPaused {
+            return "Paused"
+        }
+        if isWaitingForMail {
+            return "Standby (Apple Mail closed)"
+        }
+        return connectionState.summaryText
+    }
+
     var menuBarIconName: String {
         if isPaused {
             return "envelope.badge.fill"
+        }
+        if isWaitingForMail {
+            return "envelope.badge"
         }
         switch connectionState {
         case .idling:
