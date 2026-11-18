@@ -10,11 +10,12 @@ Thank you for considering contributing to Gmail Push Bridge!
 
 ### Submitting Pull Requests
 1. Fork the repository and create your branch from `main`.
-2. Ensure your changes compile cleanly on macOS:
+2. Run the unit tests and verify the release build compiles cleanly on macOS:
    ```zsh
-   swift build
+   ./scripts/run-tests.sh
    ```
-   Or package the app bundle:
+   *(Or run `swift test` directly.)*
+   To package the `.app` bundle:
    ```zsh
    ./scripts/build-app.sh
    ```

@@ -9,7 +9,7 @@ struct LogEntry: Identifiable, Sendable {
 
 @MainActor
 final class BridgeCoordinator: ObservableObject {
-    let settings = AppSettings()
+    let settings: AppSettings
     let updateManager = UpdateManager.shared
 
     @Published private(set) var connectionState: IMAPConnectionState = .disconnected
@@ -34,10 +34,13 @@ final class BridgeCoordinator: ObservableObject {
     private var isExecutingMailFetch: Bool = false
     private var lastMailFetchCompletedAt: Date?
 
-    init() {
+    init(settings: AppSettings? = nil, enableBackgroundMonitors: Bool = true) {
+        self.settings = settings ?? AppSettings()
+        guard enableBackgroundMonitors else { return }
+
         setupClients()
-        updateManager.startPeriodicChecks(settings: settings)
-        if settings.isConfigured {
+        updateManager.startPeriodicChecks(settings: self.settings)
+        if self.settings.isConfigured {
             startMonitoring()
         } else {
             appendLog("Welcome! Sign in with Google (OAuth 2.0 / Passkey) or add an App Password above.")
@@ -294,7 +297,7 @@ final class BridgeCoordinator: ObservableObject {
 
     // MARK: - Event Handling & Debouncing
 
-    private func handleIMAPEvent(_ event: IMAPClientEvent) {
+    func handleIMAPEvent(_ event: IMAPClientEvent) {
         switch event {
         case .stateChanged(let state):
             self.connectionState = state

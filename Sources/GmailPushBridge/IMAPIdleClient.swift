@@ -90,6 +90,7 @@ final class IMAPIdleClient: @unchecked Sendable {
     private var idleRenewalTimer: DispatchSourceTimer?
     private var commandWatchdogTimer: DispatchSourceTimer?
     private var reconnectWorkItem: DispatchWorkItem?
+    private(set) var sentCommandsForTesting: [String] = []
 
     init(eventHandler: @escaping @Sendable (IMAPClientEvent) -> Void) {
         self.eventHandler = eventHandler
@@ -129,6 +130,28 @@ final class IMAPIdleClient: @unchecked Sendable {
             self.teardownConnection()
             self.connectInternal()
         }
+    }
+
+    func configureForTesting(_ configuration: IMAPConfiguration) {
+        cancelTimers()
+        teardownConnection()
+        config = configuration
+        isStopped = false
+        step = .awaitingGreeting
+        receiveBuffer.removeAll(keepingCapacity: false)
+        tagCounter = 0
+        knownExistsCount = nil
+        reconnectAttempt = 0
+        sentCommandsForTesting.removeAll()
+    }
+
+    func receiveRawDataForTesting(_ data: Data) {
+        receiveBuffer.append(data)
+        processBufferedLines()
+    }
+
+    func triggerIdleRenewalForTesting() {
+        renewIdle()
     }
 
     // MARK: - Internal Connection Management
@@ -447,6 +470,7 @@ final class IMAPIdleClient: @unchecked Sendable {
     // MARK: - Helpers & Timers
 
     private func sendRaw(_ command: String, redactLogAs redacted: String? = nil) {
+        sentCommandsForTesting.append(command)
         guard let connection else { return }
         let data = Data(command.utf8)
         connection.send(content: data, completion: .contentProcessed { [weak self] error in
@@ -529,7 +553,7 @@ final class IMAPIdleClient: @unchecked Sendable {
         return String(format: "A%04d", tagCounter)
     }
 
-    private static func parseUntaggedNumber(line: String, keyword: String) -> Int? {
+    nonisolated static func parseUntaggedNumber(line: String, keyword: String) -> Int? {
         guard line.hasPrefix("* ") else { return nil }
         let parts = line.split(separator: " ")
         guard parts.count >= 3,
