@@ -6,6 +6,7 @@ enum IMAPClientEvent: Sendable {
     case stateChanged(IMAPConnectionState)
     case inboxCountUpdated(Int)
     case newMailDetected(existsCount: Int)
+    case mailboxSyncDetected(reason: String)
     case log(String)
 }
 
@@ -252,7 +253,7 @@ final class IMAPIdleClient: @unchecked Sendable {
     private func handleServerLine(_ line: String) {
         guard let config else { return }
 
-        // Always inspect untagged EXISTS / EXPUNGE lines in any state after SELECT
+        // Always inspect untagged EXISTS / EXPUNGE / FETCH (FLAGS) lines in any state after SELECT
         if let exists = Self.parseUntaggedNumber(line: line, keyword: "EXISTS") {
             let previous = knownExistsCount
             knownExistsCount = exists
@@ -263,6 +264,9 @@ final class IMAPIdleClient: @unchecked Sendable {
                 if let previous, exists > previous {
                     eventHandler(.log("Gmail reported * \(exists) EXISTS (was \(previous)) -> New mail arrived!"))
                     eventHandler(.newMailDetected(existsCount: exists))
+                } else if let previous, exists < previous {
+                    eventHandler(.log("Gmail reported * \(exists) EXISTS (was \(previous)) -> Messages removed from \(config.mailbox)."))
+                    eventHandler(.mailboxSyncDetected(reason: "Gmail IDLE (* \(exists) EXISTS, was \(previous))"))
                 } else if previous == nil {
                     eventHandler(.newMailDetected(existsCount: exists))
                 }
@@ -270,11 +274,14 @@ final class IMAPIdleClient: @unchecked Sendable {
                 // New mail arrived between IDLE cycles or during reconnect SELECT
                 eventHandler(.log("Mailbox count grew to \(exists) (was \(previous)) during sync -> triggering fetch."))
                 eventHandler(.newMailDetected(existsCount: exists))
+            } else if let previous, exists < previous {
+                eventHandler(.log("Mailbox count decreased to \(exists) (was \(previous)) during sync -> triggering sync."))
+                eventHandler(.mailboxSyncDetected(reason: "Gmail sync (* \(exists) EXISTS, was \(previous))"))
             }
             return
         }
 
-        if Self.parseUntaggedNumber(line: line, keyword: "EXPUNGE") != nil {
+        if let expungedSeq = Self.parseUntaggedNumber(line: line, keyword: "EXPUNGE") {
             if let current = knownExistsCount, current > 0 {
                 let updated = current - 1
                 knownExistsCount = updated
@@ -282,6 +289,24 @@ final class IMAPIdleClient: @unchecked Sendable {
                 if case .idling = step {
                     eventHandler(.stateChanged(.idling(mailbox: config.mailbox, existsCount: updated)))
                 }
+            }
+            if case .idling = step {
+                eventHandler(.log("Gmail reported * \(expungedSeq) EXPUNGE (\(knownExistsCount ?? 0) remaining) -> Message archived/removed."))
+                eventHandler(.mailboxSyncDetected(reason: "Gmail IDLE (* \(expungedSeq) EXPUNGE)"))
+            } else if case .exitingIdle = step {
+                eventHandler(.log("Gmail reported * \(expungedSeq) EXPUNGE during IDLE refresh -> Message archived/removed."))
+                eventHandler(.mailboxSyncDetected(reason: "Gmail IDLE (* \(expungedSeq) EXPUNGE)"))
+            }
+            return
+        }
+
+        if let flagSummary = Self.parseUntaggedFetchFlags(line: line) {
+            if case .idling = step {
+                eventHandler(.log("Gmail reported flag change (\(flagSummary)) -> triggering sync."))
+                eventHandler(.mailboxSyncDetected(reason: "Gmail IDLE (\(flagSummary))"))
+            } else if case .exitingIdle = step {
+                eventHandler(.log("Gmail reported flag change during IDLE refresh (\(flagSummary)) -> triggering sync."))
+                eventHandler(.mailboxSyncDetected(reason: "Gmail IDLE (\(flagSummary))"))
             }
             return
         }
@@ -514,6 +539,47 @@ final class IMAPIdleClient: @unchecked Sendable {
             return nil
         }
         return number
+    }
+
+    private nonisolated static let canonicalSystemFlags: [String: String] = [
+        "\\seen": "\\Seen",
+        "\\answered": "\\Answered",
+        "\\flagged": "\\Flagged",
+        "\\deleted": "\\Deleted",
+        "\\draft": "\\Draft"
+    ]
+
+    nonisolated static func parseUntaggedFetchFlags(line: String) -> String? {
+        guard line.hasPrefix("* ") else { return nil }
+        let parts = line.split(separator: " ")
+        guard parts.count >= 4,
+              parts[0] == "*",
+              let seq = Int(parts[1]),
+              parts[2].uppercased() == "FETCH" else {
+            return nil
+        }
+
+        guard let flagsKeywordRange = line.range(
+            of: #"(?:^|[\s(])FLAGS\s*\("#,
+            options: [.regularExpression, .caseInsensitive]
+        ) else {
+            return nil
+        }
+
+        let afterOpenParen = flagsKeywordRange.upperBound
+        guard let closeParenIndex = line[afterOpenParen...].firstIndex(of: ")") else {
+            return nil
+        }
+
+        let flagsContent = line[afterOpenParen..<closeParenIndex]
+        let matchedFlags = flagsContent
+            .split(whereSeparator: { $0.isWhitespace })
+            .compactMap { canonicalSystemFlags[$0.lowercased()] }
+
+        if matchedFlags.isEmpty {
+            return "* \(seq) FETCH FLAGS (cleared)"
+        }
+        return "* \(seq) FETCH FLAGS (\(matchedFlags.joined(separator: " ")))"
     }
 
     nonisolated static func escapeIMAPQuoted(_ value: String) -> String {

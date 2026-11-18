@@ -65,12 +65,22 @@ actor AppleMailBridge {
         let arguments: [String]
         if sanitizedAccount.isEmpty {
             script = """
-            tell application "Mail"
-                check for new mail
-                return "ALL"
-            end tell
+            on run argv
+                set shouldSync to (item 1 of argv is "true")
+                tell application "Mail"
+                    check for new mail
+                    if shouldSync then
+                        repeat with acc in every account
+                            try
+                                synchronize with acc
+                            end try
+                        end repeat
+                    end if
+                    return "ALL"
+                end tell
+            end run
             """
-            arguments = []
+            arguments = [includeSynchronize ? "true" : "false"]
         } else {
             script = """
             on run argv
@@ -87,6 +97,13 @@ actor AppleMailBridge {
                         return "ACCOUNT:" & targetName
                     else if shouldFallback then
                         check for new mail
+                        if shouldSync then
+                            repeat with acc in every account
+                                try
+                                    synchronize with acc
+                                end try
+                            end repeat
+                        end if
                         return "FALLBACK_ALL"
                     else
                         error "Account '" & targetName & "' not found in Apple Mail"
