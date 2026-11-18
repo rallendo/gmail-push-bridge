@@ -15,6 +15,8 @@ final class BridgeCoordinator: ObservableObject {
     @Published private(set) var connectionState: IMAPConnectionState = .disconnected
     @Published private(set) var isPaused: Bool = false
     @Published private(set) var isWaitingForMail: Bool = false
+    @Published private(set) var isLowPowerModeEnabled: Bool = false
+    @Published private(set) var isPausedForLowPowerMode: Bool = false
     @Published private(set) var isSigningInWithGoogle: Bool = false
     @Published private(set) var lastTriggerDate: Date?
     @Published private(set) var lastTriggerSummary: String = "No push triggered yet"
@@ -25,6 +27,7 @@ final class BridgeCoordinator: ObservableObject {
     private static let minReadArchiveDebounceSeconds: Double = 3.0
     private static let syncEchoCooldownSeconds: TimeInterval = 3.0
 
+    private let enableBackgroundMonitors: Bool
     private let mailBridge = AppleMailBridge()
     private var imapClient: IMAPIdleClient?
     private var systemMonitor: SystemMonitor?
@@ -36,8 +39,10 @@ final class BridgeCoordinator: ObservableObject {
 
     init(settings: AppSettings? = nil, enableBackgroundMonitors: Bool = true) {
         self.settings = settings ?? AppSettings()
+        self.enableBackgroundMonitors = enableBackgroundMonitors
         guard enableBackgroundMonitors else { return }
 
+        self.isLowPowerModeEnabled = ProcessInfo.processInfo.isLowPowerModeEnabled
         setupClients()
         updateManager.startPeriodicChecks(settings: self.settings)
         if self.settings.isConfigured {
@@ -62,7 +67,11 @@ final class BridgeCoordinator: ObservableObject {
         systemMonitor = SystemMonitor(
             onSystemWake: { [weak self] in
                 Task { @MainActor [weak self] in
-                    guard let self, !self.isPaused, !self.isWaitingForMail, self.settings.isConfigured else { return }
+                    guard let self, !self.isPaused, !self.isWaitingForMail, !self.isPausedForLowPowerMode, self.settings.isConfigured else { return }
+                    if self.settings.lowPowerModeBehavior == .pauseIdle && ProcessInfo.processInfo.isLowPowerModeEnabled {
+                        self.enterLowPowerStandby(logMessage: "Low Power Mode is active after wake — staying in standby.")
+                        return
+                    }
                     if self.settings.autoDisconnectWhenMailClosed && !AppleMailBridge.isMailRunning() {
                         self.enterMailClosedStandby(logMessage: "Apple Mail is closed after wake — staying in standby.")
                         return
@@ -74,7 +83,7 @@ final class BridgeCoordinator: ObservableObject {
             },
             onNetworkRestored: { [weak self] in
                 Task { @MainActor [weak self] in
-                    guard let self, !self.isPaused, !self.isWaitingForMail, self.settings.isConfigured else { return }
+                    guard let self, !self.isPaused, !self.isWaitingForMail, !self.isPausedForLowPowerMode, self.settings.isConfigured else { return }
                     if self.settings.autoDisconnectWhenMailClosed && !AppleMailBridge.isMailRunning() {
                         return
                     }
@@ -90,6 +99,11 @@ final class BridgeCoordinator: ObservableObject {
             onMailTerminated: { [weak self] in
                 Task { @MainActor [weak self] in
                     self?.handleMailTerminated()
+                }
+            },
+            onLowPowerModeChanged: { [weak self] isLowPower in
+                Task { @MainActor [weak self] in
+                    self?.handleLowPowerModeChanged(isLowPower)
                 }
             }
         )
@@ -117,6 +131,7 @@ final class BridgeCoordinator: ObservableObject {
         let existingTokens = email.isEmpty ? nil : KeychainStore.loadOAuthTokens(for: email)
 
         isWaitingForMail = false
+        isPausedForLowPowerMode = false
         imapClient?.stop()
         connectionState = .disconnected
         if !email.isEmpty {
@@ -136,6 +151,7 @@ final class BridgeCoordinator: ObservableObject {
     func removeAppPassword() {
         let email = settings.gmailAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         isWaitingForMail = false
+        isPausedForLowPowerMode = false
         imapClient?.stop()
         connectionState = .disconnected
         if !email.isEmpty {
@@ -175,19 +191,27 @@ final class BridgeCoordinator: ObservableObject {
         }
 
         isPaused = false
+        if systemMonitor != nil {
+            isLowPowerModeEnabled = ProcessInfo.processInfo.isLowPowerModeEnabled
+        }
+        if settings.lowPowerModeBehavior == .pauseIdle && isLowPowerModeEnabled {
+            enterLowPowerStandby(logMessage: "macOS Low Power Mode is active — pausing IMAP IDLE to conserve battery.")
+            return
+        }
         if settings.autoDisconnectWhenMailClosed && !AppleMailBridge.isMailRunning() {
             enterMailClosedStandby(logMessage: "Waiting for Apple Mail to launch (auto-disconnect when Mail is closed is enabled).")
             return
         }
 
         isWaitingForMail = false
+        isPausedForLowPowerMode = false
         let config = IMAPConfiguration(
             host: settings.imapHost,
             port: settings.imapPort,
             email: email,
             credentialMode: credentialMode,
             mailbox: settings.watchedMailbox,
-            idleRenewalMinutes: settings.idleRenewalMinutes
+            idleRenewalMinutes: settings.effectiveIdleRenewalMinutes(isLowPowerMode: isLowPowerModeEnabled)
         )
         imapClient?.start(with: config)
     }
@@ -195,13 +219,14 @@ final class BridgeCoordinator: ObservableObject {
     func pauseMonitoring() {
         isPaused = true
         isWaitingForMail = false
+        isPausedForLowPowerMode = false
         cancelPendingDebounce()
         imapClient?.stop()
         appendLog("Monitoring paused by user.")
     }
 
     func handleAutoDisconnectSettingChanged(_ enabled: Bool) {
-        guard settings.isConfigured, !isPaused else {
+        guard settings.isConfigured, !isPaused, !isPausedForLowPowerMode else {
             if !enabled {
                 isWaitingForMail = false
             }
@@ -219,12 +244,142 @@ final class BridgeCoordinator: ObservableObject {
         }
     }
 
+    func handleLowPowerModeBehaviorChanged(_ behavior: LowPowerModeBehavior) {
+        if systemMonitor != nil {
+            isLowPowerModeEnabled = ProcessInfo.processInfo.isLowPowerModeEnabled
+        }
+        let effectiveIdle = settings.effectiveIdleRenewalMinutes(isLowPowerMode: isLowPowerModeEnabled)
+        imapClient?.updateIdleRenewalMinutes(effectiveIdle)
+
+        guard (settings.isConfigured || !enableBackgroundMonitors), !isPaused else {
+            if behavior != .pauseIdle || !isLowPowerModeEnabled {
+                isPausedForLowPowerMode = false
+            }
+            return
+        }
+
+        if isLowPowerModeEnabled {
+            switch behavior {
+            case .pauseIdle:
+                if !isPausedForLowPowerMode {
+                    enterLowPowerStandby(logMessage: "Low Power Mode behavior set to pause — pausing IMAP IDLE.")
+                }
+            case .reduceActivity:
+                let effectiveDebounce = settings.effectiveDebounceSeconds(isLowPowerMode: true)
+                if isPausedForLowPowerMode {
+                    isPausedForLowPowerMode = false
+                    guard enableBackgroundMonitors else { return }
+                    if settings.autoDisconnectWhenMailClosed && !AppleMailBridge.isMailRunning() {
+                        enterMailClosedStandby(logMessage: "Apple Mail is closed — staying in standby.")
+                    } else {
+                        appendLog("Low Power Mode behavior set to conserve battery (debounce \(String(format: "%.1fs", effectiveDebounce)), IDLE \(effectiveIdle) min) — reconnecting.")
+                        startMonitoring()
+                        scheduleDebouncedFetch(reason: "Low Power Mode setting changed", delayOverride: 2.0)
+                    }
+                } else {
+                    appendLog("Low Power Mode active — widening debounce to \(String(format: "%.1fs", effectiveDebounce)) and IDLE refresh to \(effectiveIdle) min.")
+                }
+            case .keepNormal:
+                if isPausedForLowPowerMode {
+                    isPausedForLowPowerMode = false
+                    guard enableBackgroundMonitors else { return }
+                    if settings.autoDisconnectWhenMailClosed && !AppleMailBridge.isMailRunning() {
+                        enterMailClosedStandby(logMessage: "Apple Mail is closed — staying in standby.")
+                    } else {
+                        appendLog("Low Power Mode behavior set to keep normal timing — reconnecting.")
+                        startMonitoring()
+                        scheduleDebouncedFetch(reason: "Low Power Mode setting changed", delayOverride: 2.0)
+                    }
+                } else {
+                    appendLog("Low Power Mode active — keeping normal push timing (\(String(format: "%.1fs", settings.debounceSeconds)), \(settings.idleRenewalMinutes) min).")
+                }
+            }
+        } else if isPausedForLowPowerMode {
+            isPausedForLowPowerMode = false
+            guard enableBackgroundMonitors else { return }
+            startMonitoring()
+        }
+    }
+
+    func handleIdleRenewalMinutesChanged() {
+        let effectiveIdle = settings.effectiveIdleRenewalMinutes(isLowPowerMode: isLowPowerModeEnabled)
+        imapClient?.updateIdleRenewalMinutes(effectiveIdle)
+    }
+
     private func enterMailClosedStandby(logMessage: String) {
         cancelPendingDebounce()
         isWaitingForMail = true
+        isPausedForLowPowerMode = false
         imapClient?.stop()
         connectionState = .disconnected
         appendLog(logMessage)
+    }
+
+    private func enterLowPowerStandby(logMessage: String) {
+        cancelPendingDebounce()
+        isPausedForLowPowerMode = true
+        isWaitingForMail = false
+        imapClient?.stop()
+        connectionState = .disconnected
+        appendLog(logMessage)
+    }
+
+    func handleLowPowerModeChanged(_ isEnabled: Bool) {
+        let wasEnabled = isLowPowerModeEnabled
+        isLowPowerModeEnabled = isEnabled
+        guard wasEnabled != isEnabled || (isEnabled && settings.lowPowerModeBehavior == .pauseIdle && !isPausedForLowPowerMode) else {
+            return
+        }
+
+        let effectiveIdle = settings.effectiveIdleRenewalMinutes(isLowPowerMode: isEnabled)
+        imapClient?.updateIdleRenewalMinutes(effectiveIdle)
+
+        guard (settings.isConfigured || !enableBackgroundMonitors), !isPaused else {
+            if !isEnabled {
+                isPausedForLowPowerMode = false
+            }
+            return
+        }
+
+        if isEnabled {
+            switch settings.lowPowerModeBehavior {
+            case .reduceActivity:
+                let effectiveDebounce = settings.effectiveDebounceSeconds(isLowPowerMode: true)
+                appendLog("macOS Low Power Mode enabled — widening debounce to \(String(format: "%.1fs", effectiveDebounce)) and IDLE refresh to \(effectiveIdle) min.")
+            case .pauseIdle:
+                if !isPausedForLowPowerMode {
+                    enterLowPowerStandby(logMessage: "macOS Low Power Mode enabled — pausing IMAP IDLE to conserve battery.")
+                }
+            case .keepNormal:
+                appendLog("macOS Low Power Mode enabled — keeping normal push timing.")
+            }
+        } else {
+            switch settings.lowPowerModeBehavior {
+            case .reduceActivity:
+                appendLog("macOS Low Power Mode disabled — restoring debounce to \(String(format: "%.1fs", settings.debounceSeconds)) and IDLE refresh to \(settings.idleRenewalMinutes) min.")
+            case .pauseIdle:
+                if isPausedForLowPowerMode {
+                    isPausedForLowPowerMode = false
+                    guard enableBackgroundMonitors else {
+                        appendLog("macOS Low Power Mode disabled — ready to resume IMAP IDLE.")
+                        return
+                    }
+                    if settings.autoDisconnectWhenMailClosed && !AppleMailBridge.isMailRunning() {
+                        enterMailClosedStandby(logMessage: "macOS Low Power Mode disabled, but Apple Mail is closed — staying in standby.")
+                    } else {
+                        appendLog("macOS Low Power Mode disabled — reconnecting IMAP IDLE & checking mail.")
+                        startMonitoring()
+                        scheduleDebouncedFetch(reason: "Low Power Mode disabled", delayOverride: 2.0)
+                    }
+                }
+            case .keepNormal:
+                if isPausedForLowPowerMode {
+                    isPausedForLowPowerMode = false
+                    guard enableBackgroundMonitors else { return }
+                    startMonitoring()
+                }
+            }
+        }
     }
 
     private func cancelPendingDebounce() {
@@ -235,12 +390,15 @@ final class BridgeCoordinator: ObservableObject {
     }
 
     private func handleMailTerminated() {
-        guard settings.autoDisconnectWhenMailClosed, !isPaused, settings.isConfigured else { return }
+        guard settings.autoDisconnectWhenMailClosed, !isPaused, !isPausedForLowPowerMode, settings.isConfigured else { return }
         enterMailClosedStandby(logMessage: "Apple Mail quit — pausing IMAP IDLE until Mail launches.")
     }
 
     private func handleMailLaunched() {
-        guard !isPaused, settings.isConfigured else { return }
+        guard !isPaused, !isPausedForLowPowerMode, settings.isConfigured else { return }
+        if settings.lowPowerModeBehavior == .pauseIdle && isLowPowerModeEnabled {
+            return
+        }
         if isWaitingForMail || connectionState == .disconnected {
             isWaitingForMail = false
             appendLog("Apple Mail launched — reconnecting IMAP IDLE & checking mail.")
@@ -319,7 +477,8 @@ final class BridgeCoordinator: ObservableObject {
                Date().timeIntervalSince(lastCompleted) < Self.syncEchoCooldownSeconds {
                 return
             }
-            let minDelay = max(Self.minReadArchiveDebounceSeconds, settings.debounceSeconds)
+            let defaultDebounce = settings.effectiveDebounceSeconds(isLowPowerMode: isLowPowerModeEnabled)
+            let minDelay = max(Self.minReadArchiveDebounceSeconds, defaultDebounce)
             scheduleDebouncedFetch(
                 reason: reason,
                 delayOverride: minDelay,
@@ -344,11 +503,12 @@ final class BridgeCoordinator: ObservableObject {
         pendingDebounceIsNewMail = effectiveIsNewMail
         pendingDebounceForceSynchronize = effectiveForceSync
 
+        let defaultDebounce = settings.effectiveDebounceSeconds(isLowPowerMode: isLowPowerModeEnabled)
         let resolvedDelay: Double
         if effectiveIsNewMail && !isNewMail {
-            resolvedDelay = max(0.5, settings.debounceSeconds)
+            resolvedDelay = max(0.5, defaultDebounce)
         } else {
-            resolvedDelay = max(0.5, delayOverride ?? settings.debounceSeconds)
+            resolvedDelay = max(0.5, delayOverride ?? defaultDebounce)
         }
 
         debounceTask = Task { [weak self] in
@@ -406,8 +566,14 @@ final class BridgeCoordinator: ObservableObject {
         if isPaused {
             return "Paused"
         }
+        if isPausedForLowPowerMode {
+            return "Standby (Low Power Mode)"
+        }
         if isWaitingForMail {
             return "Standby (Apple Mail closed)"
+        }
+        if isLowPowerModeEnabled && settings.lowPowerModeBehavior == .reduceActivity && connectionState.isIdling {
+            return "\(connectionState.summaryText) • Low Power"
         }
         return connectionState.summaryText
     }
@@ -415,6 +581,9 @@ final class BridgeCoordinator: ObservableObject {
     var menuBarIconName: String {
         if isPaused {
             return "envelope.badge.fill"
+        }
+        if isPausedForLowPowerMode {
+            return "bolt.slash.circle"
         }
         if isWaitingForMail {
             return "envelope.badge"

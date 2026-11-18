@@ -7,6 +7,7 @@ final class SystemMonitor: @unchecked Sendable {
     private let onNetworkRestored: @Sendable () -> Void
     private let onMailLaunched: @Sendable () -> Void
     private let onMailTerminated: @Sendable () -> Void
+    private let onLowPowerModeChanged: @Sendable (Bool) -> Void
 
     private let pathMonitor = NWPathMonitor()
     private let monitorQueue = DispatchQueue(label: "com.gmailpushbridge.netmonitor", qos: .utility)
@@ -17,17 +18,20 @@ final class SystemMonitor: @unchecked Sendable {
     private var sleepObserver: NSObjectProtocol?
     private var mailLaunchObserver: NSObjectProtocol?
     private var mailTerminateObserver: NSObjectProtocol?
+    private var powerStateObserver: NSObjectProtocol?
 
     init(
         onSystemWake: @escaping @Sendable () -> Void,
         onNetworkRestored: @escaping @Sendable () -> Void,
         onMailLaunched: @escaping @Sendable () -> Void = {},
-        onMailTerminated: @escaping @Sendable () -> Void = {}
+        onMailTerminated: @escaping @Sendable () -> Void = {},
+        onLowPowerModeChanged: @escaping @Sendable (Bool) -> Void = { _ in }
     ) {
         self.onSystemWake = onSystemWake
         self.onNetworkRestored = onNetworkRestored
         self.onMailLaunched = onMailLaunched
         self.onMailTerminated = onMailTerminated
+        self.onLowPowerModeChanged = onLowPowerModeChanged
     }
 
     func start() {
@@ -62,6 +66,14 @@ final class SystemMonitor: @unchecked Sendable {
                 return
             }
             onMailTerminated()
+        }
+
+        powerStateObserver = NotificationCenter.default.addObserver(
+            forName: .NSProcessInfoPowerStateDidChange,
+            object: nil,
+            queue: .main
+        ) { [onLowPowerModeChanged] _ in
+            onLowPowerModeChanged(ProcessInfo.processInfo.isLowPowerModeEnabled)
         }
 
         pathMonitor.pathUpdateHandler = { [weak self] path in
@@ -101,6 +113,10 @@ final class SystemMonitor: @unchecked Sendable {
         if let mailTerminateObserver {
             nc.removeObserver(mailTerminateObserver)
             self.mailTerminateObserver = nil
+        }
+        if let powerStateObserver {
+            NotificationCenter.default.removeObserver(powerStateObserver)
+            self.powerStateObserver = nil
         }
         pathMonitor.cancel()
     }

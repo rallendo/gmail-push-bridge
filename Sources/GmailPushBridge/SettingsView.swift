@@ -371,6 +371,36 @@ struct SettingsView: View {
                         in: 5...25,
                         step: 1
                     )
+                    .onChange(of: settings.idleRenewalMinutes) { _ in
+                        coordinator.handleIdleRenewalMinutesChanged()
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Low Power Mode:")
+                            .font(.subheadline.weight(.medium))
+
+                        Picker("Low Power Mode", selection: $settings.lowPowerModeBehavior) {
+                            ForEach(LowPowerModeBehavior.allCases) { behavior in
+                                Text(behavior.title).tag(behavior)
+                            }
+                        }
+                        .labelsHidden()
+                        .onChange(of: settings.lowPowerModeBehavior) { newValue in
+                            coordinator.handleLowPowerModeBehaviorChanged(newValue)
+                        }
+
+                        if coordinator.isLowPowerModeEnabled {
+                            Label("Low Power Mode Active", systemImage: "battery.25")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.orange)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Color.orange.opacity(0.12))
+                                .clipShape(Capsule())
+                        }
+                    }
                 }
 
                 Toggle("Start automatically at login (LaunchAgent)", isOn: $launchAtLogin)
@@ -393,7 +423,7 @@ struct SettingsView: View {
             }
             .padding(.vertical, 4)
         } label: {
-            Label("Timing & Startup", systemImage: "clock.fill")
+            Label("Timing, Battery & Startup", systemImage: "clock.fill")
                 .font(.headline)
         }
     }
@@ -617,6 +647,7 @@ struct SettingsView: View {
 
     private var statusColor: Color {
         if coordinator.isPaused { return .orange }
+        if coordinator.isPausedForLowPowerMode { return .yellow }
         if coordinator.isWaitingForMail { return .blue.opacity(0.75) }
         switch coordinator.connectionState {
         case .idling:

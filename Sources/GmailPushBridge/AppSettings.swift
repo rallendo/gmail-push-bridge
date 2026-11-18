@@ -16,10 +16,31 @@ enum GmailAuthMethod: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+enum LowPowerModeBehavior: String, CaseIterable, Identifiable, Sendable {
+    case reduceActivity = "reduceActivity"
+    case pauseIdle = "pauseIdle"
+    case keepNormal = "keepNormal"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .reduceActivity:
+            return "Widen Debounce & IDLE Refresh (8s / 25m)"
+        case .pauseIdle:
+            return "Pause IMAP IDLE in Low Power Mode"
+        case .keepNormal:
+            return "Keep Normal Push Timing"
+        }
+    }
+}
+
 @MainActor
 final class AppSettings: ObservableObject {
     nonisolated static let defaultGmailIMAPHost = "imap.gmail.com"
     nonisolated static let defaultGmailIMAPPort: UInt16 = 993
+    nonisolated static let lowPowerDebounceSeconds: Double = 8.0
+    nonisolated static let lowPowerIdleRenewalMinutes: Int = 25
     nonisolated static let allowedGmailIMAPHosts: Set<String> = [
         "imap.gmail.com",
         "imap.googlemail.com"
@@ -42,6 +63,7 @@ final class AppSettings: ObservableObject {
         static let runSynchronizeInAdditionToCheck = "runSynchronizeInAdditionToCheck"
         static let syncReadAndArchiveChanges = "syncReadAndArchiveChanges"
         static let autoDisconnectWhenMailClosed = "autoDisconnectWhenMailClosed"
+        static let lowPowerModeBehavior = "lowPowerModeBehavior"
         static let debounceSeconds = "debounceSeconds"
         static let idleRenewalMinutes = "idleRenewalMinutes"
         static let imapHost = "imapHost"
@@ -80,6 +102,10 @@ final class AppSettings: ObservableObject {
 
     @Published var autoDisconnectWhenMailClosed: Bool {
         didSet { defaults.set(autoDisconnectWhenMailClosed, forKey: Keys.autoDisconnectWhenMailClosed) }
+    }
+
+    @Published var lowPowerModeBehavior: LowPowerModeBehavior {
+        didSet { defaults.set(lowPowerModeBehavior.rawValue, forKey: Keys.lowPowerModeBehavior) }
     }
 
     @Published var debounceSeconds: Double {
@@ -152,6 +178,12 @@ final class AppSettings: ObservableObject {
         } else {
             self.autoDisconnectWhenMailClosed = defaults.bool(forKey: Keys.autoDisconnectWhenMailClosed)
         }
+        if let rawLowPowerBehavior = defaults.string(forKey: Keys.lowPowerModeBehavior),
+           let parsedLowPowerBehavior = LowPowerModeBehavior(rawValue: rawLowPowerBehavior) {
+            self.lowPowerModeBehavior = parsedLowPowerBehavior
+        } else {
+            self.lowPowerModeBehavior = .reduceActivity
+        }
         let savedDebounce = defaults.double(forKey: Keys.debounceSeconds)
         self.debounceSeconds = savedDebounce > 0 ? savedDebounce : 2.0
 
@@ -180,6 +212,20 @@ final class AppSettings: ObservableObject {
         } else {
             self.automaticallyCheckForUpdates = defaults.bool(forKey: Keys.automaticallyCheckForUpdates)
         }
+    }
+
+    func effectiveDebounceSeconds(isLowPowerMode: Bool) -> Double {
+        if isLowPowerMode && lowPowerModeBehavior == .reduceActivity {
+            return max(debounceSeconds, Self.lowPowerDebounceSeconds)
+        }
+        return debounceSeconds
+    }
+
+    func effectiveIdleRenewalMinutes(isLowPowerMode: Bool) -> Int {
+        if isLowPowerMode && lowPowerModeBehavior == .reduceActivity {
+            return max(idleRenewalMinutes, Self.lowPowerIdleRenewalMinutes)
+        }
+        return idleRenewalMinutes
     }
 
     func sanitizedAppPassword() -> String? {

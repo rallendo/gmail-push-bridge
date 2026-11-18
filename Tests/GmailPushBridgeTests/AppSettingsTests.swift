@@ -47,6 +47,7 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(settings.runSynchronizeInAdditionToCheck)
         XCTAssertTrue(settings.syncReadAndArchiveChanges)
         XCTAssertTrue(settings.autoDisconnectWhenMailClosed)
+        XCTAssertEqual(settings.lowPowerModeBehavior, .reduceActivity)
         XCTAssertEqual(settings.debounceSeconds, 2.0)
         XCTAssertEqual(settings.idleRenewalMinutes, 14)
         XCTAssertEqual(settings.imapHost, AppSettings.defaultGmailIMAPHost)
@@ -68,6 +69,7 @@ final class AppSettingsTests: XCTestCase {
         settings.runSynchronizeInAdditionToCheck = false
         settings.syncReadAndArchiveChanges = false
         settings.autoDisconnectWhenMailClosed = false
+        settings.lowPowerModeBehavior = .pauseIdle
         settings.debounceSeconds = 4.5
         settings.idleRenewalMinutes = 20
         settings.imapHost = "imap.googlemail.com"
@@ -84,6 +86,7 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertFalse(reloaded.runSynchronizeInAdditionToCheck)
         XCTAssertFalse(reloaded.syncReadAndArchiveChanges)
         XCTAssertFalse(reloaded.autoDisconnectWhenMailClosed)
+        XCTAssertEqual(reloaded.lowPowerModeBehavior, .pauseIdle)
         XCTAssertEqual(reloaded.debounceSeconds, 4.5)
         XCTAssertEqual(reloaded.idleRenewalMinutes, 20)
         XCTAssertEqual(reloaded.imapHost, "imap.googlemail.com")
@@ -95,6 +98,7 @@ final class AppSettingsTests: XCTestCase {
     func testSanitizesInvalidPersistedValuesOnInit() {
         let (defaults, _) = makeIsolatedDefaults()
         defaults.set("invalidAuthMethod", forKey: "authMethod")
+        defaults.set("invalidBehavior", forKey: "lowPowerModeBehavior")
         defaults.set("evil.example.com", forKey: "imapHost")
         defaults.set(143, forKey: "imapPort")
         defaults.set(-1.5, forKey: "debounceSeconds")
@@ -102,6 +106,7 @@ final class AppSettingsTests: XCTestCase {
 
         let settings = AppSettings(defaults: defaults, startUpdateChecks: false)
         XCTAssertEqual(settings.authMethod, .oauth2)
+        XCTAssertEqual(settings.lowPowerModeBehavior, .reduceActivity)
         XCTAssertEqual(settings.imapHost, AppSettings.defaultGmailIMAPHost)
         XCTAssertEqual(settings.imapPort, AppSettings.defaultGmailIMAPPort)
         XCTAssertEqual(defaults.string(forKey: "imapHost"), AppSettings.defaultGmailIMAPHost)
@@ -118,5 +123,36 @@ final class AppSettingsTests: XCTestCase {
         let settings = AppSettings(defaults: defaults, startUpdateChecks: false)
         XCTAssertEqual(settings.imapHost, "imap.googlemail.com")
         XCTAssertEqual(settings.imapPort, 993)
+    }
+
+    func testLowPowerModeBehaviorMetadataAndEffectiveTiming() {
+        XCTAssertEqual(LowPowerModeBehavior.allCases.count, 3)
+        for behavior in LowPowerModeBehavior.allCases {
+            XCTAssertFalse(behavior.id.isEmpty)
+            XCTAssertFalse(behavior.title.isEmpty)
+        }
+
+        let (defaults, _) = makeIsolatedDefaults()
+        let settings = AppSettings(defaults: defaults, startUpdateChecks: false)
+        settings.debounceSeconds = 2.0
+        settings.idleRenewalMinutes = 14
+        settings.lowPowerModeBehavior = .reduceActivity
+
+        XCTAssertEqual(settings.effectiveDebounceSeconds(isLowPowerMode: false), 2.0)
+        XCTAssertEqual(settings.effectiveIdleRenewalMinutes(isLowPowerMode: false), 14)
+        XCTAssertEqual(settings.effectiveDebounceSeconds(isLowPowerMode: true), 8.0)
+        XCTAssertEqual(settings.effectiveIdleRenewalMinutes(isLowPowerMode: true), 25)
+
+        settings.debounceSeconds = 9.5
+        XCTAssertEqual(settings.effectiveDebounceSeconds(isLowPowerMode: true), 9.5)
+
+        settings.debounceSeconds = 2.0
+        settings.lowPowerModeBehavior = .keepNormal
+        XCTAssertEqual(settings.effectiveDebounceSeconds(isLowPowerMode: true), 2.0)
+        XCTAssertEqual(settings.effectiveIdleRenewalMinutes(isLowPowerMode: true), 14)
+
+        settings.lowPowerModeBehavior = .pauseIdle
+        XCTAssertEqual(settings.effectiveDebounceSeconds(isLowPowerMode: true), 2.0)
+        XCTAssertEqual(settings.effectiveIdleRenewalMinutes(isLowPowerMode: true), 14)
     }
 }

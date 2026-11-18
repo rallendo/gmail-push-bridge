@@ -100,4 +100,59 @@ final class SystemAndBridgeTests: XCTestCase {
         XCTAssertEqual(coordinator.activityLog.first?.message, "Entry 70")
         XCTAssertEqual(coordinator.activityLog.last?.message, "Entry 11")
     }
+
+    @MainActor
+    func testBridgeCoordinatorLowPowerModeTransitions() {
+        let suiteName = "com.gmailpushbridge.lowpower.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        addTeardownBlock {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let settings = AppSettings(defaults: defaults, startUpdateChecks: false)
+        let coordinator = BridgeCoordinator(settings: settings, enableBackgroundMonitors: false)
+
+        XCTAssertFalse(coordinator.isLowPowerModeEnabled)
+        XCTAssertFalse(coordinator.isPausedForLowPowerMode)
+
+        coordinator.handleIMAPEvent(.stateChanged(.idling(mailbox: "INBOX", existsCount: 3)))
+        XCTAssertEqual(coordinator.statusSummaryText, "Connected • IDLE on INBOX (3 msgs)")
+
+        // .reduceActivity appends "• Low Power" while idling
+        coordinator.handleLowPowerModeChanged(true)
+        XCTAssertTrue(coordinator.isLowPowerModeEnabled)
+        XCTAssertFalse(coordinator.isPausedForLowPowerMode)
+        XCTAssertEqual(coordinator.statusSummaryText, "Connected • IDLE on INBOX (3 msgs) • Low Power")
+        XCTAssertEqual(coordinator.menuBarIconName, "bolt.horizontal.circle.fill")
+
+        // .keepNormal removes "• Low Power" suffix
+        settings.lowPowerModeBehavior = .keepNormal
+        coordinator.handleLowPowerModeBehaviorChanged(.keepNormal)
+        XCTAssertEqual(coordinator.statusSummaryText, "Connected • IDLE on INBOX (3 msgs)")
+
+        // Switching to .pauseIdle while Low Power Mode is active enters standby
+        settings.lowPowerModeBehavior = .pauseIdle
+        coordinator.handleLowPowerModeBehaviorChanged(.pauseIdle)
+        XCTAssertTrue(coordinator.isPausedForLowPowerMode)
+        XCTAssertEqual(coordinator.connectionState, .disconnected)
+        XCTAssertEqual(coordinator.statusSummaryText, "Standby (Low Power Mode)")
+        XCTAssertEqual(coordinator.menuBarIconName, "bolt.slash.circle")
+
+        // Disabling Low Power Mode clears Low Power standby
+        coordinator.handleLowPowerModeChanged(false)
+        XCTAssertFalse(coordinator.isLowPowerModeEnabled)
+        XCTAssertFalse(coordinator.isPausedForLowPowerMode)
+        XCTAssertEqual(coordinator.statusSummaryText, "Disconnected")
+        XCTAssertEqual(coordinator.menuBarIconName, "envelope")
+
+        // Enabling Low Power Mode directly when .pauseIdle is configured enters standby
+        coordinator.handleLowPowerModeChanged(true)
+        XCTAssertTrue(coordinator.isPausedForLowPowerMode)
+        XCTAssertEqual(coordinator.statusSummaryText, "Standby (Low Power Mode)")
+        XCTAssertEqual(coordinator.menuBarIconName, "bolt.slash.circle")
+
+        coordinator.handleLowPowerModeChanged(false)
+        XCTAssertFalse(coordinator.isPausedForLowPowerMode)
+    }
 }

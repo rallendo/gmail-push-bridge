@@ -132,6 +132,24 @@ final class IMAPIdleClient: @unchecked Sendable {
         }
     }
 
+    /// Updates the IDLE renewal interval dynamically without tearing down the active connection.
+    func updateIdleRenewalMinutes(_ minutes: Int) {
+        queue.async { [weak self] in
+            guard let self, let current = self.config else { return }
+            self.config = IMAPConfiguration(
+                host: current.host,
+                port: current.port,
+                email: current.email,
+                credentialMode: current.credentialMode,
+                mailbox: current.mailbox,
+                idleRenewalMinutes: minutes
+            )
+            if case .idling = self.step {
+                self.scheduleIdleRenewal(minutes: minutes)
+            }
+        }
+    }
+
     func configureForTesting(_ configuration: IMAPConfiguration) {
         cancelTimers()
         teardownConnection()
