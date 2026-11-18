@@ -22,10 +22,17 @@ final class BridgeCoordinator: ObservableObject {
     @Published private(set) var detectedMailAccounts: [String] = []
     @Published private(set) var activityLog: [LogEntry] = []
 
+    private static let minReadArchiveDebounceSeconds: Double = 3.0
+    private static let syncEchoCooldownSeconds: TimeInterval = 3.0
+
     private let mailBridge = AppleMailBridge()
     private var imapClient: IMAPIdleClient?
     private var systemMonitor: SystemMonitor?
     private var debounceTask: Task<Void, Never>?
+    private var pendingDebounceIsNewMail: Bool = false
+    private var pendingDebounceForceSynchronize: Bool = false
+    private var isExecutingMailFetch: Bool = false
+    private var lastMailFetchCompletedAt: Date?
 
     init() {
         setupClients()
@@ -185,7 +192,7 @@ final class BridgeCoordinator: ObservableObject {
     func pauseMonitoring() {
         isPaused = true
         isWaitingForMail = false
-        debounceTask?.cancel()
+        cancelPendingDebounce()
         imapClient?.stop()
         appendLog("Monitoring paused by user.")
     }
@@ -210,11 +217,18 @@ final class BridgeCoordinator: ObservableObject {
     }
 
     private func enterMailClosedStandby(logMessage: String) {
-        debounceTask?.cancel()
+        cancelPendingDebounce()
         isWaitingForMail = true
         imapClient?.stop()
         connectionState = .disconnected
         appendLog(logMessage)
+    }
+
+    private func cancelPendingDebounce() {
+        debounceTask?.cancel()
+        debounceTask = nil
+        pendingDebounceIsNewMail = false
+        pendingDebounceForceSynchronize = false
     }
 
     private func handleMailTerminated() {
@@ -287,28 +301,75 @@ final class BridgeCoordinator: ObservableObject {
         case .inboxCountUpdated:
             break
         case .newMailDetected(let count):
-            scheduleDebouncedFetch(reason: "Gmail IDLE (* \(count) EXISTS)", delayOverride: nil)
+            scheduleDebouncedFetch(
+                reason: "Gmail IDLE (* \(count) EXISTS)",
+                delayOverride: nil,
+                isNewMail: true,
+                forceSynchronize: false
+            )
+        case .mailboxSyncDetected(let reason):
+            guard settings.syncReadAndArchiveChanges else { return }
+            if isExecutingMailFetch {
+                return
+            }
+            if let lastCompleted = lastMailFetchCompletedAt,
+               Date().timeIntervalSince(lastCompleted) < Self.syncEchoCooldownSeconds {
+                return
+            }
+            let minDelay = max(Self.minReadArchiveDebounceSeconds, settings.debounceSeconds)
+            scheduleDebouncedFetch(
+                reason: reason,
+                delayOverride: minDelay,
+                isNewMail: false,
+                forceSynchronize: true
+            )
         case .log(let message):
             appendLog(message)
         }
     }
 
-    private func scheduleDebouncedFetch(reason: String, delayOverride: Double?) {
+    private func scheduleDebouncedFetch(
+        reason: String,
+        delayOverride: Double?,
+        isNewMail: Bool = false,
+        forceSynchronize: Bool = false
+    ) {
+        let effectiveIsNewMail = isNewMail || (debounceTask != nil && pendingDebounceIsNewMail)
+        let effectiveForceSync = forceSynchronize || (debounceTask != nil && pendingDebounceForceSynchronize)
         debounceTask?.cancel()
-        let delaySeconds = max(0.5, delayOverride ?? settings.debounceSeconds)
+
+        pendingDebounceIsNewMail = effectiveIsNewMail
+        pendingDebounceForceSynchronize = effectiveForceSync
+
+        let resolvedDelay: Double
+        if effectiveIsNewMail && !isNewMail {
+            resolvedDelay = max(0.5, settings.debounceSeconds)
+        } else {
+            resolvedDelay = max(0.5, delayOverride ?? settings.debounceSeconds)
+        }
 
         debounceTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
+            try? await Task.sleep(nanoseconds: UInt64(resolvedDelay * 1_000_000_000))
             guard !Task.isCancelled, let self else { return }
-            await self.executeMailFetch(reason: reason)
+            let shouldForceSync = self.pendingDebounceForceSynchronize
+            self.pendingDebounceIsNewMail = false
+            self.pendingDebounceForceSynchronize = false
+            self.debounceTask = nil
+            await self.executeMailFetch(reason: reason, forceSynchronize: shouldForceSync)
         }
     }
 
-    private func executeMailFetch(reason: String) async {
+    private func executeMailFetch(reason: String, forceSynchronize: Bool = false) async {
+        isExecutingMailFetch = true
+        defer {
+            isExecutingMailFetch = false
+            lastMailFetchCompletedAt = Date()
+        }
+
         let result = await mailBridge.triggerFetch(
             accountName: settings.appleMailAccountName,
             fallbackToAllAccounts: settings.checkAllAccountsFallback,
-            includeSynchronize: settings.runSynchronizeInAdditionToCheck
+            includeSynchronize: forceSynchronize || settings.runSynchronizeInAdditionToCheck
         )
 
         lastTriggerDate = result.timestamp

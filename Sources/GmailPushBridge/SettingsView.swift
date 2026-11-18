@@ -341,6 +341,7 @@ struct SettingsView: View {
 
                 Toggle("Fallback to checking all accounts if account name isn't found", isOn: $settings.checkAllAccountsFallback)
                 Toggle("Also run 'synchronize' on account (syncs flags & folders)", isOn: $settings.runSynchronizeInAdditionToCheck)
+                Toggle("Two-way read & archive sync (sync on EXPUNGE & flag changes)", isOn: $settings.syncReadAndArchiveChanges)
                 Toggle("Automatically pause IMAP IDLE when Apple Mail is closed", isOn: $settings.autoDisconnectWhenMailClosed)
                     .onChange(of: settings.autoDisconnectWhenMailClosed) { newValue in
                         coordinator.handleAutoDisconnectSettingChanged(newValue)
