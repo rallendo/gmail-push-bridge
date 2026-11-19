@@ -26,6 +26,7 @@ struct SettingsView: View {
                 statusBanner
                 authGroupBox
                 appleMailSection
+                pushFilterSection
                 timingSection
                 updatesSection
                 activityLogSection
@@ -354,6 +355,69 @@ struct SettingsView: View {
         }
     }
 
+    private var pushFilterSection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 10) {
+                Toggle(
+                    "Filter incoming pushes by Gmail Category (ignore unselected tabs)",
+                    isOn: filterToggleBinding(\.filterByGmailCategories)
+                )
+
+                if settings.filterByGmailCategories {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Push to Apple Mail when a new message is categorized by Gmail as:")
+                            .font(.subheadline.weight(.medium))
+
+                        LazyVGrid(
+                            columns: [GridItem(.adaptive(minimum: 110), alignment: .leading)],
+                            alignment: .leading,
+                            spacing: 6
+                        ) {
+                            Toggle("Primary", isOn: filterToggleBinding(\.pushCategoryPrimary))
+                            Toggle("Updates", isOn: filterToggleBinding(\.pushCategoryUpdates))
+                            Toggle("Social", isOn: filterToggleBinding(\.pushCategorySocial))
+                            Toggle("Promotions", isOn: filterToggleBinding(\.pushCategoryPromotions))
+                            Toggle("Forums", isOn: filterToggleBinding(\.pushCategoryForums))
+                        }
+
+                        Toggle(
+                            "Only messages marked Important by Gmail (is:important)",
+                            isOn: filterToggleBinding(\.pushImportantOnly)
+                        )
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            if let query = settings.compiledGmailFilterQuery() {
+                                Text("Active X-GM-RAW query: \(query)")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text("Gmail evaluates categories server-side using IMAP X-GM-RAW without downloading message content.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.top, 2)
+                    }
+                    .padding(.leading, 18)
+                }
+            }
+            .padding(.vertical, 4)
+        } label: {
+            Label("Gmail Category Push Filter", systemImage: "line.3.horizontal.decrease.circle.fill")
+                .font(.headline)
+        }
+    }
+
+    private func filterToggleBinding(_ keyPath: ReferenceWritableKeyPath<AppSettings, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { settings[keyPath: keyPath] },
+            set: { newValue in
+                guard settings[keyPath: keyPath] != newValue else { return }
+                settings[keyPath: keyPath] = newValue
+                coordinator.handlePushFilterSettingsChanged()
+            }
+        )
+    }
+
     private var timingSection: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
@@ -562,8 +626,11 @@ struct SettingsView: View {
     private var activityLogSection: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 6) {
-                HStack {
+                HStack(spacing: 12) {
                     Spacer()
+                    Text("Filtered Out: \(coordinator.totalPushesFilteredOut)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Text("Total Pushes: \(coordinator.totalPushesTriggered)")
                         .font(.caption)
                         .foregroundStyle(.secondary)

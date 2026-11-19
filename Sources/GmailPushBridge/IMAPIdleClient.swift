@@ -6,6 +6,7 @@ enum IMAPClientEvent: Sendable {
     case stateChanged(IMAPConnectionState)
     case inboxCountUpdated(Int)
     case newMailDetected(existsCount: Int)
+    case filteredMailSkipped(existsCount: Int, query: String)
     case mailboxSyncDetected(reason: String)
     case log(String)
 }
@@ -59,6 +60,25 @@ struct IMAPConfiguration: Sendable {
     let credentialMode: IMAPCredentialMode
     let mailbox: String
     let idleRenewalMinutes: Int
+    let filterQuery: String?
+
+    init(
+        host: String,
+        port: UInt16,
+        email: String,
+        credentialMode: IMAPCredentialMode,
+        mailbox: String,
+        idleRenewalMinutes: Int,
+        filterQuery: String? = nil
+    ) {
+        self.host = host
+        self.port = port
+        self.email = email
+        self.credentialMode = credentialMode
+        self.mailbox = mailbox
+        self.idleRenewalMinutes = idleRenewalMinutes
+        self.filterQuery = filterQuery
+    }
 }
 
 final class IMAPIdleClient: @unchecked Sendable {
@@ -79,6 +99,8 @@ final class IMAPIdleClient: @unchecked Sendable {
         case enteringIdle(tag: String)
         case idling(tag: String)
         case exitingIdle(tag: String)
+        case exitingIdleForFilter(tag: String, startSeq: Int, endSeq: Int)
+        case searchingFilter(tag: String, existsCount: Int, query: String, matchedSeqs: [Int])
     }
 
     private var config: IMAPConfiguration?
@@ -87,6 +109,7 @@ final class IMAPIdleClient: @unchecked Sendable {
     private var receiveBuffer = Data()
     private var tagCounter: Int = 0
     private var knownExistsCount: Int?
+    private var pendingSelectFilterRange: (startSeq: Int, endSeq: Int)?
     private var reconnectAttempt: Int = 0
     private var isStopped: Bool = true
 
@@ -145,11 +168,28 @@ final class IMAPIdleClient: @unchecked Sendable {
                 email: current.email,
                 credentialMode: current.credentialMode,
                 mailbox: current.mailbox,
-                idleRenewalMinutes: minutes
+                idleRenewalMinutes: minutes,
+                filterQuery: current.filterQuery
             )
             if case .idling = self.step {
                 self.scheduleIdleRenewal(minutes: minutes)
             }
+        }
+    }
+
+    /// Updates the Gmail `X-GM-RAW` push filter query dynamically without tearing down the active connection.
+    func updateFilterQuery(_ filterQuery: String?) {
+        queue.async { [weak self] in
+            guard let self, let current = self.config else { return }
+            self.config = IMAPConfiguration(
+                host: current.host,
+                port: current.port,
+                email: current.email,
+                credentialMode: current.credentialMode,
+                mailbox: current.mailbox,
+                idleRenewalMinutes: current.idleRenewalMinutes,
+                filterQuery: filterQuery
+            )
         }
     }
 
@@ -162,6 +202,7 @@ final class IMAPIdleClient: @unchecked Sendable {
         receiveBuffer.removeAll(keepingCapacity: false)
         tagCounter = 0
         knownExistsCount = nil
+        pendingSelectFilterRange = nil
         reconnectAttempt = 0
         sentCommandsForTesting.removeAll()
     }
@@ -190,6 +231,7 @@ final class IMAPIdleClient: @unchecked Sendable {
         cancelTimers()
         teardownConnection()
         receiveBuffer.removeAll(keepingCapacity: false)
+        pendingSelectFilterRange = nil
         step = .awaitingGreeting
 
         eventHandler(.stateChanged(.connecting))
@@ -303,11 +345,22 @@ final class IMAPIdleClient: @unchecked Sendable {
             knownExistsCount = exists
             eventHandler(.inboxCountUpdated(exists))
 
-            if case .idling = step {
+            let trimmedFilter = config.filterQuery?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let activeFilterQuery = (trimmedFilter?.isEmpty == false) ? trimmedFilter : nil
+
+            if case .idling(let idleTag) = step {
                 eventHandler(.stateChanged(.idling(mailbox: config.mailbox, existsCount: exists)))
                 if let previous, exists > previous {
-                    eventHandler(.log("Gmail reported * \(exists) EXISTS (was \(previous)) -> New mail arrived!"))
-                    eventHandler(.newMailDetected(existsCount: exists))
+                    if activeFilterQuery != nil {
+                        let startSeq = previous + 1
+                        step = .exitingIdleForFilter(tag: idleTag, startSeq: startSeq, endSeq: exists)
+                        eventHandler(.log("Gmail reported * \(exists) EXISTS (was \(previous)) -> Checking Gmail category filter…"))
+                        startWatchdog(seconds: 12, description: "DONE acknowledgement (filter check)")
+                        sendRaw("DONE\r\n")
+                    } else {
+                        eventHandler(.log("Gmail reported * \(exists) EXISTS (was \(previous)) -> New mail arrived!"))
+                        eventHandler(.newMailDetected(existsCount: exists))
+                    }
                 } else if let previous, exists < previous {
                     eventHandler(.log("Gmail reported * \(exists) EXISTS (was \(previous)) -> Messages removed from \(config.mailbox)."))
                     eventHandler(.mailboxSyncDetected(reason: "Gmail IDLE (* \(exists) EXISTS, was \(previous))"))
@@ -315,9 +368,28 @@ final class IMAPIdleClient: @unchecked Sendable {
                     eventHandler(.newMailDetected(existsCount: exists))
                 }
             } else if let previous, exists > previous {
-                // New mail arrived between IDLE cycles or during reconnect SELECT
-                eventHandler(.log("Mailbox count grew to \(exists) (was \(previous)) during sync -> triggering fetch."))
-                eventHandler(.newMailDetected(existsCount: exists))
+                if activeFilterQuery != nil {
+                    switch step {
+                    case .exitingIdle(let idleTag):
+                        step = .exitingIdleForFilter(tag: idleTag, startSeq: previous + 1, endSeq: exists)
+                        eventHandler(.log("Gmail reported * \(exists) EXISTS (was \(previous)) during IDLE refresh -> Checking Gmail category filter…"))
+                    case .exitingIdleForFilter(let idleTag, let startSeq, let oldEndSeq):
+                        step = .exitingIdleForFilter(tag: idleTag, startSeq: startSeq, endSeq: max(oldEndSeq, exists))
+                    case .selecting:
+                        if let existing = pendingSelectFilterRange {
+                            pendingSelectFilterRange = (existing.startSeq, max(existing.endSeq, exists))
+                        } else {
+                            pendingSelectFilterRange = (previous + 1, exists)
+                        }
+                    default:
+                        eventHandler(.log("Mailbox count grew to \(exists) (was \(previous)) during sync -> triggering fetch."))
+                        eventHandler(.newMailDetected(existsCount: exists))
+                    }
+                } else {
+                    // New mail arrived between IDLE cycles or during reconnect SELECT
+                    eventHandler(.log("Mailbox count grew to \(exists) (was \(previous)) during sync -> triggering fetch."))
+                    eventHandler(.newMailDetected(existsCount: exists))
+                }
             } else if let previous, exists < previous {
                 eventHandler(.log("Mailbox count decreased to \(exists) (was \(previous)) during sync -> triggering sync."))
                 eventHandler(.mailboxSyncDetected(reason: "Gmail sync (* \(exists) EXISTS, was \(previous))"))
@@ -334,23 +406,29 @@ final class IMAPIdleClient: @unchecked Sendable {
                     eventHandler(.stateChanged(.idling(mailbox: config.mailbox, existsCount: updated)))
                 }
             }
-            if case .idling = step {
+            switch step {
+            case .idling:
                 eventHandler(.log("Gmail reported * \(expungedSeq) EXPUNGE (\(knownExistsCount ?? 0) remaining) -> Message archived/removed."))
                 eventHandler(.mailboxSyncDetected(reason: "Gmail IDLE (* \(expungedSeq) EXPUNGE)"))
-            } else if case .exitingIdle = step {
+            case .exitingIdle, .exitingIdleForFilter:
                 eventHandler(.log("Gmail reported * \(expungedSeq) EXPUNGE during IDLE refresh -> Message archived/removed."))
                 eventHandler(.mailboxSyncDetected(reason: "Gmail IDLE (* \(expungedSeq) EXPUNGE)"))
+            default:
+                break
             }
             return
         }
 
         if let flagSummary = Self.parseUntaggedFetchFlags(line: line) {
-            if case .idling = step {
+            switch step {
+            case .idling:
                 eventHandler(.log("Gmail reported flag change (\(flagSummary)) -> triggering sync."))
                 eventHandler(.mailboxSyncDetected(reason: "Gmail IDLE (\(flagSummary))"))
-            } else if case .exitingIdle = step {
+            case .exitingIdle, .exitingIdleForFilter:
                 eventHandler(.log("Gmail reported flag change during IDLE refresh (\(flagSummary)) -> triggering sync."))
                 eventHandler(.mailboxSyncDetected(reason: "Gmail IDLE (\(flagSummary))"))
+            default:
+                break
             }
             return
         }
@@ -393,9 +471,17 @@ final class IMAPIdleClient: @unchecked Sendable {
         case .selecting(let tag):
             if line.hasPrefix("\(tag) OK") {
                 cancelWatchdog()
-                enterIdle()
+                let range = pendingSelectFilterRange
+                pendingSelectFilterRange = nil
+                let trimmedFilter = config.filterQuery?.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let range, let rawQuery = trimmedFilter, !rawQuery.isEmpty {
+                    beginFilterSearch(startSeq: range.startSeq, endSeq: range.endSeq, query: rawQuery)
+                } else {
+                    enterIdle()
+                }
             } else if line.hasPrefix("\(tag) NO") || line.hasPrefix("\(tag) BAD") {
                 cancelWatchdog()
+                pendingSelectFilterRange = nil
                 eventHandler(.log("Failed to select mailbox '\(config.mailbox)': \(line)"))
                 scheduleReconnect(reason: "SELECT failed: \(line)")
             }
@@ -426,6 +512,47 @@ final class IMAPIdleClient: @unchecked Sendable {
             } else if line.hasPrefix("\(tag) NO") || line.hasPrefix("\(tag) BAD") || line.hasPrefix("* BYE") {
                 cancelWatchdog()
                 scheduleReconnect(reason: "Error exiting IDLE: \(line)")
+            }
+
+        case .exitingIdleForFilter(let tag, let startSeq, let endSeq):
+            if line.hasPrefix("\(tag) OK") {
+                cancelWatchdog()
+                let trimmedFilter = config.filterQuery?.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let rawQuery = trimmedFilter, !rawQuery.isEmpty {
+                    beginFilterSearch(startSeq: startSeq, endSeq: endSeq, query: rawQuery)
+                } else {
+                    eventHandler(.newMailDetected(existsCount: knownExistsCount ?? endSeq))
+                    enterIdle()
+                }
+            } else if line.hasPrefix("\(tag) NO") || line.hasPrefix("\(tag) BAD") || line.hasPrefix("* BYE") {
+                cancelWatchdog()
+                scheduleReconnect(reason: "Error exiting IDLE for filter check: \(line)")
+            }
+
+        case .searchingFilter(let tag, let existsCount, let query, var matchedSeqs):
+            if let found = Self.parseUntaggedSearch(line: line) {
+                matchedSeqs.append(contentsOf: found)
+                step = .searchingFilter(tag: tag, existsCount: existsCount, query: query, matchedSeqs: matchedSeqs)
+            } else if line.hasPrefix("\(tag) OK") {
+                cancelWatchdog()
+                let currentExists = knownExistsCount ?? existsCount
+                if !matchedSeqs.isEmpty {
+                    eventHandler(.log("Gmail category filter matched (\(query)) -> New mail confirmed!"))
+                    eventHandler(.newMailDetected(existsCount: currentExists))
+                } else {
+                    eventHandler(.log("Gmail category filter skipped new mail (no match for '\(query)')."))
+                    eventHandler(.filteredMailSkipped(existsCount: currentExists, query: query))
+                }
+                enterIdle()
+            } else if line.hasPrefix("\(tag) NO") || line.hasPrefix("\(tag) BAD") {
+                cancelWatchdog()
+                let currentExists = knownExistsCount ?? existsCount
+                eventHandler(.log("Gmail category filter SEARCH failed (\(line)) — falling back to triggering fetch."))
+                eventHandler(.newMailDetected(existsCount: currentExists))
+                enterIdle()
+            } else if line.hasPrefix("* BYE") {
+                cancelWatchdog()
+                scheduleReconnect(reason: "Server sent BYE during filter search")
             }
         }
     }
@@ -488,6 +615,17 @@ final class IMAPIdleClient: @unchecked Sendable {
         sendRaw("DONE\r\n")
     }
 
+    private func beginFilterSearch(startSeq: Int, endSeq: Int, query: String) {
+        let searchTag = nextTag()
+        let effectiveEnd = max(startSeq, knownExistsCount ?? endSeq)
+        let safeStart = max(1, min(startSeq, effectiveEnd))
+        let rangeSpec = safeStart == effectiveEnd ? "\(effectiveEnd)" : "\(safeStart):\(effectiveEnd)"
+        let escapedQuery = Self.escapeIMAPQuoted(query)
+        step = .searchingFilter(tag: searchTag, existsCount: effectiveEnd, query: query, matchedSeqs: [])
+        startWatchdog(seconds: 15, description: "SEARCH X-GM-RAW response")
+        sendRaw("\(searchTag) SEARCH \(rangeSpec) X-GM-RAW \"\(escapedQuery)\"\r\n")
+    }
+
     // MARK: - Helpers & Timers
 
     private func sendRaw(_ command: String, redactLogAs redacted: String? = nil) {
@@ -543,6 +681,7 @@ final class IMAPIdleClient: @unchecked Sendable {
 
     private func teardownConnection() {
         step = .idle
+        pendingSelectFilterRange = nil
         if let conn = connection {
             conn.stateUpdateHandler = nil
             conn.cancel()
@@ -584,6 +723,17 @@ final class IMAPIdleClient: @unchecked Sendable {
             return nil
         }
         return number
+    }
+
+    nonisolated static func parseUntaggedSearch(line: String) -> [Int]? {
+        guard line.hasPrefix("* ") else { return nil }
+        let parts = line.split(separator: " ")
+        guard parts.count >= 2,
+              parts[0] == "*",
+              parts[1].uppercased() == "SEARCH" else {
+            return nil
+        }
+        return parts.dropFirst(2).compactMap { Int($0) }
     }
 
     private nonisolated static let canonicalSystemFlags: [String: String] = [

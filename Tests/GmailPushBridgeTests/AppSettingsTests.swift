@@ -53,6 +53,13 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(settings.imapHost, AppSettings.defaultGmailIMAPHost)
         XCTAssertEqual(settings.imapPort, AppSettings.defaultGmailIMAPPort)
         XCTAssertEqual(settings.watchedMailbox, "INBOX")
+        XCTAssertFalse(settings.filterByGmailCategories)
+        XCTAssertTrue(settings.pushCategoryPrimary)
+        XCTAssertFalse(settings.pushCategoryUpdates)
+        XCTAssertFalse(settings.pushCategorySocial)
+        XCTAssertFalse(settings.pushCategoryPromotions)
+        XCTAssertFalse(settings.pushCategoryForums)
+        XCTAssertFalse(settings.pushImportantOnly)
         XCTAssertTrue(settings.automaticallyCheckForUpdates)
         XCTAssertFalse(settings.isConfigured)
     }
@@ -75,6 +82,13 @@ final class AppSettingsTests: XCTestCase {
         settings.imapHost = "imap.googlemail.com"
         settings.imapPort = 993
         settings.watchedMailbox = "[Gmail]/All Mail"
+        settings.filterByGmailCategories = true
+        settings.pushCategoryPrimary = false
+        settings.pushCategoryUpdates = true
+        settings.pushCategorySocial = true
+        settings.pushCategoryPromotions = true
+        settings.pushCategoryForums = true
+        settings.pushImportantOnly = true
         settings.automaticallyCheckForUpdates = false
 
         let reloaded = AppSettings(defaults: defaults, startUpdateChecks: false)
@@ -92,6 +106,13 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(reloaded.imapHost, "imap.googlemail.com")
         XCTAssertEqual(reloaded.imapPort, 993)
         XCTAssertEqual(reloaded.watchedMailbox, "[Gmail]/All Mail")
+        XCTAssertTrue(reloaded.filterByGmailCategories)
+        XCTAssertFalse(reloaded.pushCategoryPrimary)
+        XCTAssertTrue(reloaded.pushCategoryUpdates)
+        XCTAssertTrue(reloaded.pushCategorySocial)
+        XCTAssertTrue(reloaded.pushCategoryPromotions)
+        XCTAssertTrue(reloaded.pushCategoryForums)
+        XCTAssertTrue(reloaded.pushImportantOnly)
         XCTAssertFalse(reloaded.automaticallyCheckForUpdates)
     }
 
@@ -154,5 +175,40 @@ final class AppSettingsTests: XCTestCase {
         settings.lowPowerModeBehavior = .pauseIdle
         XCTAssertEqual(settings.effectiveDebounceSeconds(isLowPowerMode: true), 2.0)
         XCTAssertEqual(settings.effectiveIdleRenewalMinutes(isLowPowerMode: true), 14)
+    }
+
+    func testGmailCategoryFilterQueryAndSummary() {
+        let (defaults, _) = makeIsolatedDefaults()
+        let settings = AppSettings(defaults: defaults, startUpdateChecks: false)
+
+        // Disabled by default -> nil query
+        XCTAssertNil(settings.compiledGmailFilterQuery())
+        XCTAssertEqual(settings.activeFilterSummary, "All Inbox Mail")
+
+        // Enabled with default Primary
+        settings.filterByGmailCategories = true
+        XCTAssertEqual(settings.compiledGmailFilterQuery(), "category:primary")
+        XCTAssertEqual(settings.activeFilterSummary, "Primary")
+
+        // Multiple categories combined with OR
+        settings.pushCategoryUpdates = true
+        XCTAssertEqual(settings.compiledGmailFilterQuery(), "(category:primary OR category:updates)")
+        XCTAssertEqual(settings.activeFilterSummary, "Primary, Updates")
+
+        // Multiple categories + Important only
+        settings.pushImportantOnly = true
+        XCTAssertEqual(settings.compiledGmailFilterQuery(), "(category:primary OR category:updates) is:important")
+        XCTAssertEqual(settings.activeFilterSummary, "Primary, Updates (Important only)")
+
+        // Important only with no categories selected
+        settings.pushCategoryPrimary = false
+        settings.pushCategoryUpdates = false
+        XCTAssertEqual(settings.compiledGmailFilterQuery(), "is:important")
+        XCTAssertEqual(settings.activeFilterSummary, "Important only")
+
+        // All categories & Important unchecked while filter enabled -> safe fallback to Primary
+        settings.pushImportantOnly = false
+        XCTAssertEqual(settings.compiledGmailFilterQuery(), "category:primary")
+        XCTAssertEqual(settings.activeFilterSummary, "Primary")
     }
 }

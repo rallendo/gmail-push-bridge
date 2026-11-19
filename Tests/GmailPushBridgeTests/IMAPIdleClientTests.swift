@@ -32,7 +32,8 @@ final class IMAPIdleClientTests: XCTestCase {
         email: String = "user@gmail.com",
         credentialMode: IMAPCredentialMode = .appPassword("abcd efgh"),
         mailbox: String = "INBOX",
-        idleRenewalMinutes: Int = 14
+        idleRenewalMinutes: Int = 14,
+        filterQuery: String? = nil
     ) -> IMAPConfiguration {
         IMAPConfiguration(
             host: host,
@@ -40,7 +41,8 @@ final class IMAPIdleClientTests: XCTestCase {
             email: email,
             credentialMode: credentialMode,
             mailbox: mailbox,
-            idleRenewalMinutes: idleRenewalMinutes
+            idleRenewalMinutes: idleRenewalMinutes,
+            filterQuery: filterQuery
         )
     }
 
@@ -277,5 +279,109 @@ final class IMAPIdleClientTests: XCTestCase {
         XCTAssertEqual(IMAPIdleClient.tcpKeepaliveIdleSeconds, 600)
         XCTAssertEqual(IMAPIdleClient.tcpKeepaliveIntervalSeconds, 30)
         XCTAssertEqual(IMAPIdleClient.maxReconnectDelaySeconds, 300)
+    }
+
+    func testParseUntaggedSearch() {
+        XCTAssertEqual(IMAPIdleClient.parseUntaggedSearch(line: "* SEARCH"), [])
+        XCTAssertEqual(IMAPIdleClient.parseUntaggedSearch(line: "* search"), [])
+        XCTAssertEqual(IMAPIdleClient.parseUntaggedSearch(line: "* SEARCH 11"), [11])
+        XCTAssertEqual(IMAPIdleClient.parseUntaggedSearch(line: "* search 11 12 15"), [11, 12, 15])
+
+        XCTAssertNil(IMAPIdleClient.parseUntaggedSearch(line: "* 11 EXISTS"))
+        XCTAssertNil(IMAPIdleClient.parseUntaggedSearch(line: "* SEARCHING 11"))
+        XCTAssertNil(IMAPIdleClient.parseUntaggedSearch(line: "A0004 OK SEARCH completed"))
+    }
+
+    func testCategoryFilterMatchingAndSkippingInIdle() {
+        let recorder = EventRecorder()
+        let client = IMAPIdleClient { event in
+            recorder.append(event)
+        }
+        defer { client.stop() }
+
+        let config = makeConfiguration(filterQuery: "category:primary")
+        client.configureForTesting(config)
+
+        client.receiveRawDataForTesting(Data("* OK Gimap ready\r\n".utf8))
+        client.receiveRawDataForTesting(Data("A0001 OK authenticated\r\n".utf8))
+        client.receiveRawDataForTesting(Data("* 10 EXISTS\r\nA0002 OK [READ-WRITE] INBOX selected.\r\n".utf8))
+        client.receiveRawDataForTesting(Data("+ idling\r\n".utf8))
+
+        // 1. Matching message -> DONE -> SEARCH 11 -> .newMailDetected -> IDLE
+        recorder.removeAll()
+        client.receiveRawDataForTesting(Data("* 11 EXISTS\r\n".utf8))
+        XCTAssertEqual(client.sentCommandsForTesting.last, "DONE\r\n")
+        XCTAssertFalse(recorder.snapshot().contains { if case .newMailDetected = $0 { return true }; return false })
+
+        client.receiveRawDataForTesting(Data("A0003 OK IDLE terminated\r\n".utf8))
+        XCTAssertEqual(
+            client.sentCommandsForTesting.last,
+            "A0004 SEARCH 11 X-GM-RAW \"category:primary\"\r\n"
+        )
+
+        client.receiveRawDataForTesting(Data("* SEARCH 11\r\nA0004 OK SEARCH completed\r\n".utf8))
+        XCTAssertTrue(recorder.snapshot().contains {
+            if case .newMailDetected(existsCount: 11) = $0 { return true }
+            return false
+        })
+        XCTAssertEqual(client.sentCommandsForTesting.last, "A0005 IDLE\r\n")
+        client.receiveRawDataForTesting(Data("+ idling\r\n".utf8))
+
+        // 2. Non-matching message -> empty * SEARCH -> .filteredMailSkipped -> IDLE
+        recorder.removeAll()
+        client.receiveRawDataForTesting(Data("* 12 EXISTS\r\n".utf8))
+        XCTAssertEqual(client.sentCommandsForTesting.last, "DONE\r\n")
+
+        client.receiveRawDataForTesting(Data("A0005 OK IDLE terminated\r\n".utf8))
+        XCTAssertEqual(
+            client.sentCommandsForTesting.last,
+            "A0006 SEARCH 12 X-GM-RAW \"category:primary\"\r\n"
+        )
+
+        client.receiveRawDataForTesting(Data("* SEARCH\r\nA0006 OK SEARCH completed\r\n".utf8))
+        XCTAssertFalse(recorder.snapshot().contains { if case .newMailDetected = $0 { return true }; return false })
+        XCTAssertTrue(recorder.snapshot().contains {
+            if case .filteredMailSkipped(existsCount: 12, query: "category:primary") = $0 { return true }
+            return false
+        })
+        XCTAssertEqual(client.sentCommandsForTesting.last, "A0007 IDLE\r\n")
+        client.receiveRawDataForTesting(Data("+ idling\r\n".utf8))
+
+        // 3. Burst arrival while exiting IDLE -> single range SEARCH 13:14
+        recorder.removeAll()
+        client.receiveRawDataForTesting(Data("* 13 EXISTS\r\n* 14 EXISTS\r\n".utf8))
+        XCTAssertEqual(client.sentCommandsForTesting.last, "DONE\r\n")
+        let doneCount = client.sentCommandsForTesting.filter { $0 == "DONE\r\n" }.count
+        XCTAssertEqual(doneCount, 3)
+
+        client.receiveRawDataForTesting(Data("A0007 OK IDLE terminated\r\n".utf8))
+        XCTAssertEqual(
+            client.sentCommandsForTesting.last,
+            "A0008 SEARCH 13:14 X-GM-RAW \"category:primary\"\r\n"
+        )
+
+        client.receiveRawDataForTesting(Data("* SEARCH 14\r\nA0008 OK SEARCH completed\r\n".utf8))
+        XCTAssertTrue(recorder.snapshot().contains {
+            if case .newMailDetected(existsCount: 14) = $0 { return true }
+            return false
+        })
+        XCTAssertEqual(client.sentCommandsForTesting.last, "A0009 IDLE\r\n")
+        client.receiveRawDataForTesting(Data("+ idling\r\n".utf8))
+
+        // 4. Fail-open when SEARCH returns NO
+        recorder.removeAll()
+        client.receiveRawDataForTesting(Data("* 15 EXISTS\r\n".utf8))
+        client.receiveRawDataForTesting(Data("A0009 OK IDLE terminated\r\n".utf8))
+        XCTAssertEqual(
+            client.sentCommandsForTesting.last,
+            "A0010 SEARCH 15 X-GM-RAW \"category:primary\"\r\n"
+        )
+
+        client.receiveRawDataForTesting(Data("A0010 NO [CANNOT] Search unsupported\r\n".utf8))
+        XCTAssertTrue(recorder.snapshot().contains {
+            if case .newMailDetected(existsCount: 15) = $0 { return true }
+            return false
+        })
+        XCTAssertEqual(client.sentCommandsForTesting.last, "A0011 IDLE\r\n")
     }
 }

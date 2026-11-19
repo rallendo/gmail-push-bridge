@@ -22,6 +22,7 @@ final class BridgeCoordinator: ObservableObject {
     @Published private(set) var lastTriggerDate: Date?
     @Published private(set) var lastTriggerSummary: String = "No push triggered yet"
     @Published private(set) var totalPushesTriggered: Int = 0
+    @Published private(set) var totalPushesFilteredOut: Int = 0
     @Published private(set) var detectedMailAccounts: [String] = []
     @Published private(set) var activityLog: [LogEntry] = []
 
@@ -207,7 +208,8 @@ final class BridgeCoordinator: ObservableObject {
             email: email,
             credentialMode: credentialMode,
             mailbox: settings.watchedMailbox,
-            idleRenewalMinutes: settings.effectiveIdleRenewalMinutes(isLowPowerMode: isLowPowerModeEnabled)
+            idleRenewalMinutes: settings.effectiveIdleRenewalMinutes(isLowPowerMode: isLowPowerModeEnabled),
+            filterQuery: settings.compiledGmailFilterQuery()
         )
         imapClient?.start(with: config)
     }
@@ -301,6 +303,26 @@ final class BridgeCoordinator: ObservableObject {
     func handleIdleRenewalMinutesChanged() {
         let effectiveIdle = settings.effectiveIdleRenewalMinutes(isLowPowerMode: isLowPowerModeEnabled)
         imapClient?.updateIdleRenewalMinutes(effectiveIdle)
+    }
+
+    func handlePushFilterSettingsChanged() {
+        if settings.filterByGmailCategories &&
+            !settings.pushCategoryPrimary &&
+            !settings.pushCategoryUpdates &&
+            !settings.pushCategorySocial &&
+            !settings.pushCategoryPromotions &&
+            !settings.pushCategoryForums &&
+            !settings.pushImportantOnly {
+            settings.pushCategoryPrimary = true
+        }
+
+        let query = settings.compiledGmailFilterQuery()
+        imapClient?.updateFilterQuery(query)
+        if settings.filterByGmailCategories {
+            appendLog("Gmail category filter active: \(settings.activeFilterSummary) [X-GM-RAW: \(query ?? "")]")
+        } else {
+            appendLog("Gmail category filter disabled — pushing all INBOX mail.")
+        }
     }
 
     private func enterMailClosedStandby(logMessage: String) {
@@ -492,6 +514,9 @@ final class BridgeCoordinator: ObservableObject {
                 isNewMail: true,
                 forceSynchronize: false
             )
+        case .filteredMailSkipped(let count, _):
+            totalPushesFilteredOut += 1
+            lastTriggerSummary = "Filtered out (* \(count) EXISTS — non-matching category)"
         case .mailboxSyncDetected(let reason):
             guard settings.syncReadAndArchiveChanges else { return }
             if isExecutingMailFetch {

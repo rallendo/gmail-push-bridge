@@ -179,4 +179,44 @@ final class SystemAndBridgeTests: XCTestCase {
         coordinator.handleSystemWake()
         XCTAssertFalse(coordinator.isSleeping)
     }
+
+    @MainActor
+    func testBridgeCoordinatorPushFilterEventsAndFallback() {
+        let suiteName = "com.gmailpushbridge.filter.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        addTeardownBlock {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let settings = AppSettings(defaults: defaults, startUpdateChecks: false)
+        let coordinator = BridgeCoordinator(settings: settings, enableBackgroundMonitors: false)
+
+        XCTAssertEqual(coordinator.totalPushesFilteredOut, 0)
+
+        coordinator.handleIMAPEvent(.filteredMailSkipped(existsCount: 42, query: "category:primary"))
+        XCTAssertEqual(coordinator.totalPushesFilteredOut, 1)
+        XCTAssertEqual(coordinator.totalPushesTriggered, 0)
+        XCTAssertEqual(coordinator.lastTriggerSummary, "Filtered out (* 42 EXISTS — non-matching category)")
+
+        // Enabling filter with all categories & Important unchecked auto-restores Primary
+        settings.filterByGmailCategories = true
+        settings.pushCategoryPrimary = false
+        settings.pushCategoryUpdates = false
+        settings.pushCategorySocial = false
+        settings.pushCategoryPromotions = false
+        settings.pushCategoryForums = false
+        settings.pushImportantOnly = false
+
+        coordinator.handlePushFilterSettingsChanged()
+        XCTAssertTrue(settings.pushCategoryPrimary)
+        XCTAssertEqual(settings.compiledGmailFilterQuery(), "category:primary")
+        XCTAssertTrue(coordinator.activityLog.first?.message.contains("category:primary") == true)
+
+        // Disabling filter logs disabled state
+        settings.filterByGmailCategories = false
+        coordinator.handlePushFilterSettingsChanged()
+        XCTAssertNil(settings.compiledGmailFilterQuery())
+        XCTAssertTrue(coordinator.activityLog.first?.message.contains("disabled") == true)
+    }
 }

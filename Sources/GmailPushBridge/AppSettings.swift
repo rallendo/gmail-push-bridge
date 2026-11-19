@@ -70,6 +70,13 @@ final class AppSettings: ObservableObject {
         static let imapHost = "imapHost"
         static let imapPort = "imapPort"
         static let watchedMailbox = "watchedMailbox"
+        static let filterByGmailCategories = "filterByGmailCategories"
+        static let pushCategoryPrimary = "pushCategoryPrimary"
+        static let pushCategoryUpdates = "pushCategoryUpdates"
+        static let pushCategorySocial = "pushCategorySocial"
+        static let pushCategoryPromotions = "pushCategoryPromotions"
+        static let pushCategoryForums = "pushCategoryForums"
+        static let pushImportantOnly = "pushImportantOnly"
         static let automaticallyCheckForUpdates = "automaticallyCheckForUpdates"
     }
 
@@ -127,6 +134,34 @@ final class AppSettings: ObservableObject {
 
     @Published var watchedMailbox: String {
         didSet { defaults.set(watchedMailbox, forKey: Keys.watchedMailbox) }
+    }
+
+    @Published var filterByGmailCategories: Bool {
+        didSet { defaults.set(filterByGmailCategories, forKey: Keys.filterByGmailCategories) }
+    }
+
+    @Published var pushCategoryPrimary: Bool {
+        didSet { defaults.set(pushCategoryPrimary, forKey: Keys.pushCategoryPrimary) }
+    }
+
+    @Published var pushCategoryUpdates: Bool {
+        didSet { defaults.set(pushCategoryUpdates, forKey: Keys.pushCategoryUpdates) }
+    }
+
+    @Published var pushCategorySocial: Bool {
+        didSet { defaults.set(pushCategorySocial, forKey: Keys.pushCategorySocial) }
+    }
+
+    @Published var pushCategoryPromotions: Bool {
+        didSet { defaults.set(pushCategoryPromotions, forKey: Keys.pushCategoryPromotions) }
+    }
+
+    @Published var pushCategoryForums: Bool {
+        didSet { defaults.set(pushCategoryForums, forKey: Keys.pushCategoryForums) }
+    }
+
+    @Published var pushImportantOnly: Bool {
+        didSet { defaults.set(pushImportantOnly, forKey: Keys.pushImportantOnly) }
     }
 
     @Published var automaticallyCheckForUpdates: Bool {
@@ -208,6 +243,42 @@ final class AppSettings: ObservableObject {
         }
         self.watchedMailbox = defaults.string(forKey: Keys.watchedMailbox) ?? "INBOX"
 
+        if defaults.object(forKey: Keys.filterByGmailCategories) == nil {
+            self.filterByGmailCategories = false
+        } else {
+            self.filterByGmailCategories = defaults.bool(forKey: Keys.filterByGmailCategories)
+        }
+        if defaults.object(forKey: Keys.pushCategoryPrimary) == nil {
+            self.pushCategoryPrimary = true
+        } else {
+            self.pushCategoryPrimary = defaults.bool(forKey: Keys.pushCategoryPrimary)
+        }
+        if defaults.object(forKey: Keys.pushCategoryUpdates) == nil {
+            self.pushCategoryUpdates = false
+        } else {
+            self.pushCategoryUpdates = defaults.bool(forKey: Keys.pushCategoryUpdates)
+        }
+        if defaults.object(forKey: Keys.pushCategorySocial) == nil {
+            self.pushCategorySocial = false
+        } else {
+            self.pushCategorySocial = defaults.bool(forKey: Keys.pushCategorySocial)
+        }
+        if defaults.object(forKey: Keys.pushCategoryPromotions) == nil {
+            self.pushCategoryPromotions = false
+        } else {
+            self.pushCategoryPromotions = defaults.bool(forKey: Keys.pushCategoryPromotions)
+        }
+        if defaults.object(forKey: Keys.pushCategoryForums) == nil {
+            self.pushCategoryForums = false
+        } else {
+            self.pushCategoryForums = defaults.bool(forKey: Keys.pushCategoryForums)
+        }
+        if defaults.object(forKey: Keys.pushImportantOnly) == nil {
+            self.pushImportantOnly = false
+        } else {
+            self.pushImportantOnly = defaults.bool(forKey: Keys.pushImportantOnly)
+        }
+
         if defaults.object(forKey: Keys.automaticallyCheckForUpdates) == nil {
             self.automaticallyCheckForUpdates = true
         } else {
@@ -227,6 +298,52 @@ final class AppSettings: ObservableObject {
             return max(idleRenewalMinutes, Self.lowPowerIdleRenewalMinutes)
         }
         return idleRenewalMinutes
+    }
+
+    private var selectedGmailCategories: [(label: String, queryTerm: String)] {
+        let specs: [(enabled: Bool, label: String, queryTerm: String)] = [
+            (pushCategoryPrimary, "Primary", "category:primary"),
+            (pushCategoryUpdates, "Updates", "category:updates"),
+            (pushCategorySocial, "Social", "category:social"),
+            (pushCategoryPromotions, "Promotions", "category:promotions"),
+            (pushCategoryForums, "Forums", "category:forums")
+        ]
+        return specs.filter(\.enabled).map { ($0.label, $0.queryTerm) }
+    }
+
+    /// Builds a Gmail `X-GM-RAW` search query for the currently enabled category and importance filters.
+    func compiledGmailFilterQuery() -> String? {
+        guard filterByGmailCategories else { return nil }
+        let terms = selectedGmailCategories.map(\.queryTerm)
+
+        let categoryExpr: String?
+        if terms.count == 1 {
+            categoryExpr = terms[0]
+        } else if terms.count > 1 {
+            categoryExpr = "(\(terms.joined(separator: " OR ")))"
+        } else if pushImportantOnly {
+            categoryExpr = nil
+        } else {
+            categoryExpr = "category:primary"
+        }
+
+        if pushImportantOnly {
+            if let categoryExpr {
+                return "\(categoryExpr) is:important"
+            }
+            return "is:important"
+        }
+        return categoryExpr
+    }
+
+    var activeFilterSummary: String {
+        guard filterByGmailCategories else { return "All Inbox Mail" }
+        let labels = selectedGmailCategories.map(\.label)
+        if labels.isEmpty {
+            return pushImportantOnly ? "Important only" : "Primary"
+        }
+        let joined = labels.joined(separator: ", ")
+        return pushImportantOnly ? "\(joined) (Important only)" : joined
     }
 
     func sanitizedAppPassword() -> String? {
