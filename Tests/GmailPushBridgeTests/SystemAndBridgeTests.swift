@@ -9,6 +9,46 @@ final class SystemAndBridgeTests: XCTestCase {
         XCTAssertEqual(AppleMailBridge.sanitizeAccountName("   \t\n  "), "")
     }
 
+    func testBuildOsascriptArgumentsInsertsEndOfOptionsSeparator() {
+        let args = AppleMailBridge.buildOsascriptArguments(
+            script: "on run argv\nend run",
+            arguments: ["-e do shell script \"id\"", "-lJavaScript", "false"]
+        )
+        XCTAssertEqual(
+            args,
+            ["-e", "on run argv\nend run", "--", "-e do shell script \"id\"", "-lJavaScript", "false"]
+        )
+        XCTAssertEqual(AppleMailBridge.buildOsascriptArguments(script: "tell app \"Mail\" to name"), ["-e", "tell app \"Mail\" to name", "--"])
+    }
+
+    func testLaunchAgentResolvedExecutablePathValidation() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LaunchAgentExecTests-\(UUID().uuidString)")
+        let bundleURL = tempRoot.appendingPathComponent("GmailPushBridge.app")
+        let macOSDir = bundleURL.appendingPathComponent("Contents/MacOS")
+        try FileManager.default.createDirectory(at: macOSDir, withIntermediateDirectories: true)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+
+        let validExec = macOSDir.appendingPathComponent("GmailPushBridge")
+        try Data("#!/bin/sh\n".utf8).write(to: validExec)
+        XCTAssertEqual(
+            LaunchAgentManager.resolvedExecutablePath(bundleURL: bundleURL, executableURL: validExec),
+            validExec.resolvingSymlinksInPath().standardizedFileURL.path
+        )
+
+        // Reject symlink executable
+        let outsideTarget = tempRoot.appendingPathComponent("outside-bin")
+        try Data("#!/bin/sh\n".utf8).write(to: outsideTarget)
+        let symlinkExec = macOSDir.appendingPathComponent("SymlinkExec")
+        try FileManager.default.createSymbolicLink(at: symlinkExec, withDestinationURL: outsideTarget)
+        XCTAssertNil(LaunchAgentManager.resolvedExecutablePath(bundleURL: bundleURL, executableURL: symlinkExec))
+
+        // Reject executable outside Contents/MacOS inside the bundle
+        XCTAssertNil(LaunchAgentManager.resolvedExecutablePath(bundleURL: bundleURL, executableURL: outsideTarget))
+    }
+
     func testLaunchAgentApprovedPaths() throws {
         XCTAssertTrue(LaunchAgentManager.isApprovedApplicationPath("/Applications/GmailPushBridge.app"))
 

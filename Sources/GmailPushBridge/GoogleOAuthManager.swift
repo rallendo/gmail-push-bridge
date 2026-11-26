@@ -2,6 +2,7 @@ import AppKit
 import CryptoKit
 import Foundation
 import Network
+import Security
 
 struct OAuthTokenSet: Codable, Sendable, Equatable {
     var accessToken: String
@@ -73,6 +74,13 @@ actor GoogleOAuthManager {
     }
 
     private var inFlightRefreshes: [String: Task<String, Error>] = [:]
+    private let urlSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.httpCookieAcceptPolicy = .never
+        config.httpShouldSetCookies = false
+        config.urlCache = nil
+        return URLSession(configuration: config)
+    }()
 
     nonisolated static func resolveClientSecret(explicit: String?, stored: @autoclosure () -> String?) -> String? {
         if let explicitTrimmed = explicit?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -154,7 +162,8 @@ actor GoogleOAuthManager {
         if let oauthErr = callbackParams["error"] {
             throw GoogleOAuthError.invalidCallback(oauthErr)
         }
-        guard callbackParams["state"] == expectedState else {
+        guard let callbackState = callbackParams["state"],
+              Self.constantTimeEqual(callbackState, expectedState) else {
             throw GoogleOAuthError.stateMismatch
         }
         guard let code = callbackParams["code"], !code.isEmpty else {
@@ -237,12 +246,9 @@ actor GoogleOAuthManager {
         request.httpMethod = "POST"
         request.timeoutInterval = 10
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Self.formURLEncodedBody(["token": trimmed])
 
-        var components = URLComponents()
-        components.queryItems = [URLQueryItem(name: "token", value: trimmed)]
-        request.httpBody = components.percentEncodedQuery?.data(using: .utf8)
-
-        _ = try? await URLSession.shared.data(for: request)
+        _ = try? await urlSession.data(for: request)
     }
 
     nonisolated static func sanitizeSASLField(_ value: String) -> String {
@@ -296,17 +302,37 @@ actor GoogleOAuthManager {
         return try await postTokenRequest(params: params)
     }
 
+    nonisolated static func formURLEncodedBody(_ params: [String: String]) -> Data {
+        let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        let encodedPairs = params
+            .sorted { $0.key < $1.key }
+            .map { key, value in
+                let encodedKey = key.addingPercentEncoding(withAllowedCharacters: unreserved) ?? key
+                let encodedValue = value.addingPercentEncoding(withAllowedCharacters: unreserved) ?? value
+                return "\(encodedKey)=\(encodedValue)"
+            }
+        return Data(encodedPairs.joined(separator: "&").utf8)
+    }
+
+    nonisolated static func constantTimeEqual(_ lhs: String, _ rhs: String) -> Bool {
+        let lhsBytes = Array(lhs.utf8)
+        let rhsBytes = Array(rhs.utf8)
+        guard lhsBytes.count == rhsBytes.count else { return false }
+        var diff: UInt8 = 0
+        for index in 0..<lhsBytes.count {
+            diff |= lhsBytes[index] ^ rhsBytes[index]
+        }
+        return diff == 0
+    }
+
     private func postTokenRequest(params: [String: String]) async throws -> TokenResponse {
         var request = URLRequest(url: URL(string: "https://oauth2.googleapis.com/token")!)
         request.httpMethod = "POST"
         request.timeoutInterval = 15
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Self.formURLEncodedBody(params)
 
-        var components = URLComponents()
-        components.queryItems = params.map { URLQueryItem(name: $0.key, value: $0.value) }
-        request.httpBody = components.percentEncodedQuery?.data(using: .utf8)
-
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await urlSession.data(for: request)
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
 
         if (200..<300).contains(statusCode) {
@@ -323,14 +349,15 @@ actor GoogleOAuthManager {
 
     private func fetchUserEmail(accessToken: String) async throws -> String {
         var request = URLRequest(url: URL(string: "https://www.googleapis.com/oauth2/v3/userinfo")!)
+        request.timeoutInterval = 15
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await urlSession.data(for: request)
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(statusCode) else {
             throw GoogleOAuthError.tokenExchangeFailed("Failed to verify Google account email (HTTP \(statusCode)).")
         }
         let info = try JSONDecoder().decode(UserInfoResponse.self, from: data)
-        guard info.email_verified != false,
+        guard info.email_verified == true,
               let email = info.email?.trimmingCharacters(in: .whitespacesAndNewlines),
               !email.isEmpty else {
             throw GoogleOAuthError.invalidCallback("Google did not return a verified email address for this account.")
@@ -355,7 +382,10 @@ actor GoogleOAuthManager {
 
     nonisolated static func generateRandomURLSafeString(byteCount: Int) -> String {
         var bytes = [UInt8](repeating: 0, count: byteCount)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        guard status == errSecSuccess else {
+            fatalError("SecRandomCopyBytes failed with OSStatus \(status)")
+        }
         return Data(bytes)
             .base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
@@ -367,9 +397,14 @@ actor GoogleOAuthManager {
 // MARK: - Ephemeral Loopback Callback Server (127.0.0.1)
 
 actor LoopbackCallbackServer {
+    private static let maxRequestBytes = 8192
+    private static let headerDelimiterCRLF = Data("\r\n\r\n".utf8)
+    private static let headerDelimiterLF = Data("\n\n".utf8)
+
     private let queue = DispatchQueue(label: "com.gmailpushbridge.oauth.loopback")
     private let expectedState: String
     private var listener: NWListener?
+    private var boundPort: UInt16?
     private var callbackContinuation: CheckedContinuation<[String: String], Error>?
 
     init(expectedState: String) throws {
@@ -382,7 +417,7 @@ actor LoopbackCallbackServer {
         let nwListener = try NWListener(using: parameters)
         self.listener = nwListener
 
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UInt16, Error>) in
+        let port = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UInt16, Error>) in
             final class ResumeGuard: @unchecked Sendable {
                 var resumed = false
             }
@@ -413,6 +448,8 @@ actor LoopbackCallbackServer {
 
             nwListener.start(queue: queue)
         }
+        self.boundPort = port
+        return port
     }
 
     func waitForCallback(timeoutSeconds: Int) async throws -> [String: String] {
@@ -433,6 +470,7 @@ actor LoopbackCallbackServer {
         }
         listener?.cancel()
         listener = nil
+        boundPort = nil
     }
 
     private func expireIfPending() {
@@ -443,26 +481,72 @@ actor LoopbackCallbackServer {
     }
 
     private func handleIncomingConnection(_ connection: NWConnection) {
+        let expectedPort = self.boundPort
         connection.start(queue: queue)
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, _, _ in
-            guard let self else { return }
-            let requestText = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-            let (requestPath, queryParams) = Self.extractRequestPathAndQuery(fromHTTPRequest: requestText)
+        receiveRequestData(on: connection, buffer: Data(), expectedPort: expectedPort)
+    }
 
-            // Ignore favicon or unrelated requests
-            guard requestPath == "/oauth2callback" else {
+    private nonisolated func receiveRequestData(on connection: NWConnection, buffer: Data, expectedPort: UInt16?) {
+        let remaining = Self.maxRequestBytes - buffer.count
+        guard remaining > 0 else {
+            connection.cancel()
+            return
+        }
+
+        connection.receive(minimumIncompleteLength: 1, maximumLength: remaining) { [weak self] data, _, isComplete, error in
+            guard let self else { return }
+            if error != nil {
                 connection.cancel()
                 return
             }
 
+            var accumulated = buffer
+            if let data, !data.isEmpty {
+                accumulated.append(data)
+            }
+
+            let hasHeaderEnd = accumulated.range(of: Self.headerDelimiterCRLF) != nil
+                || accumulated.range(of: Self.headerDelimiterLF) != nil
+
+            if !hasHeaderEnd && !isComplete && accumulated.count < Self.maxRequestBytes {
+                self.receiveRequestData(on: connection, buffer: accumulated, expectedPort: expectedPort)
+                return
+            }
+
+            let requestText = String(data: accumulated, encoding: .utf8) ?? ""
+            let parsed = Self.parseHTTPRequest(requestText, expectedPort: expectedPort)
+
+            // Ignore favicon or unrelated paths
+            guard parsed.path == "/oauth2callback" else {
+                connection.cancel()
+                return
+            }
+
+            let securityHeaders = "Cache-Control: no-store\r\nPragma: no-cache\r\nReferrer-Policy: no-referrer\r\nX-Content-Type-Options: nosniff\r\n"
+
+            guard parsed.method == "GET", parsed.hostValid else {
+                let badBody = """
+                <!DOCTYPE html><html><head><meta charset="utf-8"><title>Invalid OAuth Request</title></head>
+                <body style="font-family:-apple-system,sans-serif;padding:40px;text-align:center;">
+                <h2>Invalid OAuth Request</h2><p>Unsupported HTTP method or Host header.</p></body></html>
+                """
+                let badResponse = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(badBody.utf8.count)\r\n\(securityHeaders)Connection: close\r\n\r\n\(badBody)"
+                connection.send(content: Data(badResponse.utf8), completion: .contentProcessed { _ in
+                    connection.cancel()
+                })
+                return
+            }
+
+            let queryParams = parsed.query
             let hasCodeOrError = (queryParams["code"]?.isEmpty == false) || (queryParams["error"]?.isEmpty == false)
-            guard queryParams["state"] == self.expectedState, hasCodeOrError else {
+            let stateMatches = queryParams["state"].map { GoogleOAuthManager.constantTimeEqual($0, self.expectedState) } ?? false
+            guard stateMatches, hasCodeOrError else {
                 let badBody = """
                 <!DOCTYPE html><html><head><meta charset="utf-8"><title>Invalid OAuth Callback</title></head>
                 <body style="font-family:-apple-system,sans-serif;padding:40px;text-align:center;">
                 <h2>Invalid OAuth Callback</h2><p>State mismatch or missing parameters; waiting for valid sign-in.</p></body></html>
                 """
-                let badResponse = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(badBody.utf8.count)\r\nConnection: close\r\n\r\n\(badBody)"
+                let badResponse = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(badBody.utf8.count)\r\n\(securityHeaders)Connection: close\r\n\r\n\(badBody)"
                 connection.send(content: Data(badResponse.utf8), completion: .contentProcessed { _ in
                     connection.cancel()
                 })
@@ -484,7 +568,7 @@ actor LoopbackCallbackServer {
                 <h2>Sign-in was not completed</h2><p>You can close this tab and try again from Gmail Push Bridge.</p></body></html>
                 """
 
-            let responseHeader = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(html.utf8.count)\r\nConnection: close\r\n\r\n\(html)"
+            let responseHeader = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(html.utf8.count)\r\n\(securityHeaders)Connection: close\r\n\r\n\(html)"
             connection.send(content: Data(responseHeader.utf8), completion: .contentProcessed { _ in
                 connection.cancel()
             })
@@ -502,15 +586,24 @@ actor LoopbackCallbackServer {
         }
     }
 
-    nonisolated static func extractRequestPathAndQuery(fromHTTPRequest request: String) -> (String, [String: String]) {
-        guard let firstLine = request.split(separator: "\r\n").first ?? request.split(separator: "\n").first else {
-            return ("", [:])
+    nonisolated static func parseHTTPRequest(
+        _ request: String,
+        expectedPort: UInt16?
+    ) -> (method: String, path: String, query: [String: String], hostValid: Bool) {
+        let normalized = request.replacingOccurrences(of: "\r\n", with: "\n")
+        let lines = normalized.components(separatedBy: "\n")
+        guard let firstLine = lines.first, !firstLine.isEmpty else {
+            return ("", "", [:], false)
         }
-        let parts = firstLine.split(separator: " ")
-        guard parts.count >= 2 else { return ("", [:]) }
+        let parts = firstLine.split(separator: " ", omittingEmptySubsequences: true)
+        guard parts.count >= 2 else {
+            return ("", "", [:], false)
+        }
+        let method = String(parts[0]).uppercased()
         let pathAndQuery = String(parts[1])
-        guard let components = URLComponents(string: "http://127.0.0.1\(pathAndQuery)") else {
-            return ("", [:])
+        guard pathAndQuery.hasPrefix("/"),
+              let components = URLComponents(string: "http://127.0.0.1\(pathAndQuery)") else {
+            return (method, "", [:], false)
         }
         var dict: [String: String] = [:]
         for item in components.queryItems ?? [] {
@@ -518,6 +611,40 @@ actor LoopbackCallbackServer {
                 dict[item.name] = value
             }
         }
-        return (components.path, dict)
+
+        var hostHeader: String?
+        for line in lines.dropFirst() {
+            if line.isEmpty { break }
+            if let colonIdx = line.firstIndex(of: ":") {
+                let headerName = line[..<colonIdx].trimmingCharacters(in: .whitespaces).lowercased()
+                if headerName == "host" {
+                    hostHeader = line[line.index(after: colonIdx)...].trimmingCharacters(in: .whitespaces).lowercased()
+                    break
+                }
+            }
+        }
+
+        let hostValid: Bool
+        if let hostHeader {
+            if let expectedPort {
+                hostValid = (hostHeader == "127.0.0.1:\(expectedPort)")
+            } else if hostHeader == "127.0.0.1" {
+                hostValid = true
+            } else if hostHeader.hasPrefix("127.0.0.1:") {
+                let portPart = hostHeader.dropFirst("127.0.0.1:".count)
+                hostValid = !portPart.isEmpty && portPart.allSatisfy(\.isNumber)
+            } else {
+                hostValid = false
+            }
+        } else {
+            hostValid = false
+        }
+
+        return (method, components.path, dict, hostValid)
+    }
+
+    nonisolated static func extractRequestPathAndQuery(fromHTTPRequest request: String) -> (String, [String: String]) {
+        let parsed = parseHTTPRequest(request, expectedPort: nil)
+        return (parsed.path, parsed.query)
     }
 }

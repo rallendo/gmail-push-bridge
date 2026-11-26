@@ -40,7 +40,6 @@ struct SettingsView: View {
             OAuthSetupGuideSheet()
         }
         .onAppear {
-            syncCachedCredentialInputs()
             launchAtLogin = LaunchAgentManager.isEnabled
         }
     }
@@ -160,12 +159,6 @@ struct SettingsView: View {
                 HStack(spacing: 8) {
                     TextField("xxx.apps.googleusercontent.com", text: $settings.oauthClientId)
                         .textFieldStyle(.roundedBorder)
-                        .onChange(of: settings.oauthClientId) { newClientId in
-                            if newClientId.contains("."),
-                               let savedSecret = KeychainStore.cachedOAuthClientSecret(forClientId: newClientId) {
-                                oauthClientSecretInput = savedSecret
-                            }
-                        }
 
                     Button("Import client_secret.json…") {
                         importGoogleClientSecretJSON()
@@ -185,6 +178,15 @@ struct SettingsView: View {
                         }
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.green)
+
+                        Button("Remove") {
+                            coordinator.removeOAuthClientSecret()
+                            oauthClientSecretInput = ""
+                            saveFeedback = "OAuth Client Secret removed from Keychain."
+                        }
+                        .buttonStyle(.link)
+                        .font(.caption)
+                        .foregroundStyle(.red)
                     }
                     if let url = URL(string: "https://console.cloud.google.com/apis/credentials") {
                         Link("Google Cloud Credentials ↗", destination: url)
@@ -245,9 +247,7 @@ struct SettingsView: View {
                                 try? KeychainStore.saveOAuthClientSecret(currentSecret, forClientId: settings.oauthClientId)
                             }
                             coordinator.signOutOAuth()
-                            if currentSecret.isEmpty {
-                                syncCachedCredentialInputs()
-                            }
+                            oauthClientSecretInput = ""
                             saveFeedback = "Signed out. OAuth Client ID & Secret kept for easy re-sign-in."
                         }
                     }
@@ -609,7 +609,9 @@ struct SettingsView: View {
                                 Text("Installing update and relaunching…")
                                     .font(.caption)
                             }
-                        } else {
+                        } else if updateManager.supportsVerifiedAutoInstall,
+                                  update.downloadURL != nil,
+                                  update.expectedSHA256 != nil {
                             HStack(spacing: 10) {
                                 Button("Download & Install Update") {
                                     updateManager.downloadAndInstallUpdate(update)
@@ -617,8 +619,23 @@ struct SettingsView: View {
                                 .buttonStyle(.borderedProminent)
 
                                 Button("View on GitHub ↗") {
-                                    NSWorkspace.shared.open(update.htmlURL)
+                                    if UpdateManager.isValidReleasePageURL(update.htmlURL) {
+                                        NSWorkspace.shared.open(update.htmlURL)
+                                    }
                                 }
+                            }
+                        } else {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Button("Download on GitHub ↗") {
+                                    if UpdateManager.isValidReleasePageURL(update.htmlURL) {
+                                        NSWorkspace.shared.open(update.htmlURL)
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+
+                                Text("Manual download (automatic installation activates on Developer ID-signed releases).")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -741,25 +758,12 @@ struct SettingsView: View {
         }
     }
 
-    private func syncCachedCredentialInputs() {
-        if let cachedPassword = KeychainStore.cachedAppPassword(for: settings.gmailAddress) {
-            appPasswordInput = cachedPassword
-        }
-        if let cachedSecret = KeychainStore.cachedOAuthClientSecret(forClientId: settings.oauthClientId) {
-            oauthClientSecretInput = cachedSecret
-        } else if let tokens = KeychainStore.cachedOAuthTokens(for: settings.gmailAddress),
-                  let tokenSecret = tokens.clientSecret?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !tokenSecret.isEmpty {
-            oauthClientSecretInput = tokenSecret
-        }
-    }
-
     private func startGoogleOAuthFlow() {
         saveFeedback = nil
         Task {
             do {
                 try await coordinator.signInWithGoogle(clientSecret: oauthClientSecretInput)
-                syncCachedCredentialInputs()
+                oauthClientSecretInput = ""
                 settings.objectWillChange.send()
                 saveFeedback = "Signed in as \(settings.gmailAddress) ✓"
             } catch {
@@ -794,17 +798,18 @@ struct SettingsView: View {
                 settings.oauthClientId = info.client_id
                 if let secret = info.client_secret?.trimmingCharacters(in: .whitespacesAndNewlines),
                    !secret.isEmpty {
-                    oauthClientSecretInput = secret
                     do {
                         try KeychainStore.saveOAuthClientSecret(secret, forClientId: info.client_id)
+                        oauthClientSecretInput = ""
                         settings.objectWillChange.send()
                         saveFeedback = "Imported OAuth Client ID & Secret ✓"
                     } catch {
+                        oauthClientSecretInput = secret
                         saveFeedback = "Imported Client ID & Secret (Keychain save warning: \(error.localizedDescription))"
                         coordinator.appendLog("Warning saving OAuth Client Secret to Keychain: \(error.localizedDescription)")
                     }
                 } else {
-                    oauthClientSecretInput = KeychainStore.cachedOAuthClientSecret(forClientId: info.client_id) ?? ""
+                    oauthClientSecretInput = ""
                     settings.objectWillChange.send()
                     saveFeedback = "Imported OAuth Client ID ✓"
                 }
@@ -838,6 +843,7 @@ struct SettingsView: View {
 
         do {
             try KeychainStore.saveAppPassword(cleanedPassword, for: email)
+            appPasswordInput = ""
             settings.objectWillChange.send()
             saveFeedback = "Saved to Keychain ✓"
             coordinator.startMonitoring()

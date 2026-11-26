@@ -13,6 +13,7 @@ final class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegat
     static let apiEndpoint = URL(string: "https://api.github.com/repos/\(repositoryOwner)/\(repositoryName)/releases/latest")!
     nonisolated static let expectedBundleIdentifier = "com.gmailpushbridge.app"
     nonisolated static let allowedBundleNames: Set<String> = ["GmailPushBridge.app", "Gmail Push Bridge.app"]
+    nonisolated static let maxUpdateArchiveBytes: Int64 = 100 * 1024 * 1024
 
     enum State: Equatable {
         case idle
@@ -55,13 +56,27 @@ final class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegat
 
     private var downloadTask: URLSessionDownloadTask?
     private var activeDownloadExpectedSHA256: String?
+    private lazy var apiSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.httpCookieAcceptPolicy = .never
+        config.httpShouldSetCookies = false
+        config.urlCache = nil
+        return URLSession(configuration: config)
+    }()
     private lazy var downloadSession: URLSession = {
-        let config = URLSessionConfiguration.default
+        let config = URLSessionConfiguration.ephemeral
+        config.httpCookieAcceptPolicy = .never
+        config.httpShouldSetCookies = false
+        config.urlCache = nil
         return URLSession(configuration: config, delegate: self, delegateQueue: OperationQueue.main)
     }()
 
     private var periodicTimer: Timer?
     private var isUserInitiatedCheck: Bool = false
+
+    var supportsVerifiedAutoInstall: Bool {
+        Self.currentBundleTeamIdentifier() != nil
+    }
 
     var currentVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
@@ -121,7 +136,7 @@ final class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegat
                 request.setValue("GmailPushBridge/\(currentVersion)", forHTTPHeaderField: "User-Agent")
                 request.timeoutInterval = 15
 
-                let (data, response) = try await URLSession.shared.data(for: request)
+                let (data, response) = try await apiSession.data(for: request)
 
                 guard let httpResponse = response as? HTTPURLResponse else {
                     throw UpdateError.networkError("Invalid server response.")
@@ -173,7 +188,7 @@ final class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegat
             let zipAsset = zipAssets.first
 
             let rawDownloadURL = zipAsset.flatMap { URL(string: $0.browserDownloadUrl) }
-            let downloadURL = rawDownloadURL.flatMap { Self.isValidDownloadURL($0) ? $0 : nil }
+            let downloadURL = rawDownloadURL.flatMap { Self.isValidDownloadURL($0, allowRedirectHosts: false) ? $0 : nil }
             let defaultReleasesURL = URL(string: "https://github.com/\(Self.repositoryOwner)/\(Self.repositoryName)/releases")!
             let parsedHTMLURL = URL(string: release.htmlUrl)
             let htmlURL = parsedHTMLURL.flatMap { Self.isValidReleasePageURL($0) ? $0 : nil } ?? defaultReleasesURL
@@ -241,18 +256,24 @@ final class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegat
     // MARK: - Download & Install
 
     func downloadAndInstallUpdate(_ release: AppRelease) {
-        guard let downloadURL = release.downloadURL,
-              Self.isValidDownloadURL(downloadURL) else {
-            // If there's no valid direct zip asset, open the validated release page in the browser
+        guard supportsVerifiedAutoInstall,
+              let downloadURL = release.downloadURL,
+              Self.isValidDownloadURL(downloadURL, allowRedirectHosts: false),
+              let expectedSHA256 = release.expectedSHA256,
+              !expectedSHA256.isEmpty else {
+            // If automatic installation is unsupported (e.g., ad-hoc build) or unverified, open the validated release page in the browser
             if Self.isValidReleasePageURL(release.htmlURL) {
                 NSWorkspace.shared.open(release.htmlURL)
             }
+            self.statusMessage = supportsVerifiedAutoInstall
+                ? "Release missing verified download or checksum; opened GitHub Releases."
+                : "Automatic installation requires a Developer ID-signed build; opened GitHub Releases."
             return
         }
 
         guard !state.isDownloading else { return }
 
-        self.activeDownloadExpectedSHA256 = release.expectedSHA256
+        self.activeDownloadExpectedSHA256 = expectedSHA256
         self.state = .downloading(progress: 0.0)
         self.statusMessage = "Downloading update \(release.tagName)…"
 
@@ -278,11 +299,44 @@ final class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegat
 
     nonisolated func urlSession(
         _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        guard let targetURL = request.url,
+              Self.isValidDownloadURL(targetURL, allowRedirectHosts: true) else {
+            task.cancel()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.activeDownloadExpectedSHA256 = nil
+                self.state = .failed("Download rejected: untrusted redirect target.")
+                self.statusMessage = "Download verification failed."
+            }
+            completionHandler(nil)
+            return
+        }
+        completionHandler(request)
+    }
+
+    nonisolated func urlSession(
+        _ session: URLSession,
         downloadTask: URLSessionDownloadTask,
         didWriteData bytesWritten: Int64,
         totalBytesWritten: Int64,
         totalBytesExpectedToWrite: Int64
     ) {
+        if totalBytesExpectedToWrite > Self.maxUpdateArchiveBytes || totalBytesWritten > Self.maxUpdateArchiveBytes {
+            downloadTask.cancel()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.activeDownloadExpectedSHA256 = nil
+                self.state = .failed("Download rejected: update archive exceeds maximum allowed size.")
+                self.statusMessage = "Download size limit exceeded."
+            }
+            return
+        }
+
         let progress: Double
         if totalBytesExpectedToWrite > 0 {
             progress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
@@ -323,7 +377,7 @@ final class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegat
         guard let httpResponse = downloadTask.response as? HTTPURLResponse,
               httpResponse.statusCode == 200,
               let finalURL = httpResponse.url,
-              Self.isValidDownloadURL(finalURL) else {
+              Self.isValidDownloadURL(finalURL, allowRedirectHosts: true) else {
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 self.activeDownloadExpectedSHA256 = nil
@@ -362,21 +416,25 @@ final class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegat
             var tempDir: URL?
 
             do {
-                // 1. Verify SHA-256 archive digest if provided by GitHub Release metadata/notes
-                if let expectedSHA256 {
-                    let zipData = try Data(contentsOf: zipURL)
-                    let actualDigest = SHA256.hash(data: zipData)
-                    let actualHex = actualDigest.map { String(format: "%02x", $0) }.joined()
-                    guard actualHex.caseInsensitiveCompare(expectedSHA256) == .orderedSame else {
-                        throw UpdateError.verificationFailed("Downloaded archive failed SHA-256 integrity verification.")
-                    }
+                // 1. Fail closed unless both an expected SHA-256 checksum and Developer ID Team ID are present
+                guard let expectedSHA256, !expectedSHA256.isEmpty else {
+                    throw UpdateError.verificationFailed("Release did not provide a SHA-256 checksum; automatic installation aborted.")
+                }
+                guard let teamID = Self.currentBundleTeamIdentifier() else {
+                    throw UpdateError.verificationFailed("Automatic installation requires an Apple Developer ID-signed build. Please download updates manually from GitHub Releases.")
+                }
+
+                // 2. Verify SHA-256 archive digest via streaming read (with max archive size limit)
+                let actualHex = try Self.computeFileSHA256(at: zipURL)
+                guard actualHex.caseInsensitiveCompare(expectedSHA256) == .orderedSame else {
+                    throw UpdateError.verificationFailed("Downloaded archive failed SHA-256 integrity verification.")
                 }
 
                 let stagingDir = fileManager.temporaryDirectory.appendingPathComponent("GmailPushBridge-Staging-\(UUID().uuidString)")
                 try fileManager.createDirectory(at: stagingDir, withIntermediateDirectories: true)
                 tempDir = stagingDir
 
-                // 2. Extract zip with ditto (preserves symlinks, code signatures, and permissions)
+                // 3. Extract zip with ditto (preserves symlinks, code signatures, and permissions)
                 let ditto = Process()
                 ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
                 ditto.arguments = ["-xk", zipURL.path, stagingDir.path]
@@ -387,7 +445,7 @@ final class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegat
                     throw UpdateError.installFailed("Failed to unpack update archive.")
                 }
 
-                // 3. Locate an allowlisted .app bundle inside extracted files (rejecting symlinks)
+                // 4. Locate an allowlisted .app bundle inside extracted files (rejecting symlinks)
                 let topLevelItems = try fileManager.contentsOfDirectory(at: stagingDir, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey])
 
                 var appBundleURL: URL?
@@ -410,10 +468,10 @@ final class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegat
                     throw UpdateError.invalidBundle
                 }
 
-                // 4. Verify bundle structure and cryptographic code signature before clearing quarantine
-                try Self.verifyAppBundleSignature(at: extractedApp)
+                // 5. Verify bundle structure and cryptographic Developer ID code signature before clearing quarantine
+                try Self.verifyAppBundleSignature(at: extractedApp, requiredTeamID: teamID)
 
-                // 5. Remove macOS Quarantine flag only after verification succeeds
+                // 6. Remove macOS Quarantine flag only after cryptographic verification succeeds
                 let xattr = Process()
                 xattr.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
                 xattr.arguments = ["-r", "-d", "com.apple.quarantine", extractedApp.path]
@@ -434,7 +492,11 @@ final class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegat
                     destinationPath = "/Applications/GmailPushBridge.app"
                 }
 
-                // 6. Write a static installer script receiving all paths strictly via positional arguments
+                guard destinationPath.hasPrefix("/"), destinationPath.hasSuffix(".app") else {
+                    throw UpdateError.installFailed("Invalid installation destination path.")
+                }
+
+                // 7. Write a static installer script receiving all paths strictly via positional arguments
                 let scriptURL = fileManager.temporaryDirectory.appendingPathComponent("install-gmailpushbridge-\(UUID().uuidString).sh")
                 let installerScript = """
                 #!/bin/bash
@@ -443,6 +505,7 @@ final class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegat
                 SRC="$2"
                 DST="$3"
                 STAGING_DIR="$4"
+                TEAM_ID="$5"
 
                 # Wait for running app process to terminate
                 for i in {1..100}; do
@@ -456,12 +519,16 @@ final class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegat
                 if /bin/rm -rf -- "$DST" 2>/dev/null && /usr/bin/ditto "$SRC" "$DST" 2>/dev/null; then
                     :
                 else
-                    # If standard write fails (e.g., system /Applications requires elevated rights), pass paths via argv to AppleScript
-                    /usr/bin/osascript - "$SRC" "$DST" <<'APPLESCRIPT'
+                    # If standard write fails (e.g., system /Applications requires elevated rights),
+                    # copy into a root-owned 0700 directory and re-verify code signature before replacing DST.
+                    /usr/bin/osascript - "$SRC" "$DST" "$TEAM_ID" <<'APPLESCRIPT'
                 on run argv
                     set srcPath to item 1 of argv
                     set dstPath to item 2 of argv
-                    do shell script "/bin/rm -rf -- " & quoted form of dstPath & " && /usr/bin/ditto " & quoted form of srcPath & " " & quoted form of dstPath with administrator privileges
+                    set teamId to item 3 of argv
+                    set reqStr to "=identifier \\"com.gmailpushbridge.app\\" and anchor apple generic and certificate leaf[subject.OU] = \\"" & teamId & "\\""
+                    set shellCmd to "ROOT_STAGE=$(/usr/bin/mktemp -d /private/tmp/gmailpushbridge-install.XXXXXX) && trap '/bin/rm -rf -- \\"$ROOT_STAGE\\"' EXIT && /bin/chmod 700 \\"$ROOT_STAGE\\" && /usr/bin/ditto " & quoted form of srcPath & " \\"$ROOT_STAGE/GmailPushBridge.app\\" && /usr/bin/codesign --verify --deep --strict -R " & quoted form of reqStr & " \\"$ROOT_STAGE/GmailPushBridge.app\\" && /bin/rm -rf -- " & quoted form of dstPath & " && /usr/bin/ditto \\"$ROOT_STAGE/GmailPushBridge.app\\" " & quoted form of dstPath
+                    do shell script shellCmd with administrator privileges
                 end run
                 APPLESCRIPT
                 fi
@@ -484,7 +551,8 @@ final class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegat
                     String(ProcessInfo.processInfo.processIdentifier),
                     extractedApp.path,
                     destinationPath,
-                    stagingDir.path
+                    stagingDir.path,
+                    teamID
                 ]
                 try runner.run()
 
@@ -510,27 +578,89 @@ final class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegat
 
     // MARK: - Origin, Checksum & Signature Verification
 
-    nonisolated static func isValidDownloadURL(_ url: URL) -> Bool {
+    private nonisolated static func hasUnsafePathTraversal(_ url: URL) -> Bool {
+        let rawPath = URLComponents(url: url, resolvingAgainstBaseURL: true)?.percentEncodedPath ?? url.path
+        let lowerRaw = rawPath.lowercased()
+        if lowerRaw.contains("\\") ||
+           lowerRaw.contains("%5c") ||
+           lowerRaw.contains("%2e") ||
+           lowerRaw.contains("%2f") ||
+           lowerRaw.contains("%00") {
+            return true
+        }
+        let rawSegments = rawPath.split(separator: "/", omittingEmptySubsequences: false)
+        if rawSegments.contains(".") || rawSegments.contains("..") {
+            return true
+        }
+        let decodedSegments = url.path.split(separator: "/", omittingEmptySubsequences: false)
+        return decodedSegments.contains(".") || decodedSegments.contains("..")
+    }
+
+    nonisolated static func isValidDownloadURL(_ url: URL, allowRedirectHosts: Bool = true) -> Bool {
         guard url.scheme?.lowercased() == "https",
-              let host = url.host?.lowercased() else {
+              url.user == nil,
+              url.password == nil,
+              (url.port == nil || url.port == 443),
+              let host = url.host?.lowercased(),
+              !hasUnsafePathTraversal(url) else {
             return false
         }
 
+        let normalizedPath = url.standardized.path.lowercased()
         if host == "github.com" {
             let expectedPrefix = "/\(repositoryOwner.lowercased())/\(repositoryName.lowercased())/releases/download/"
-            return url.path.lowercased().hasPrefix(expectedPrefix)
+            return normalizedPath.hasPrefix(expectedPrefix) && normalizedPath.count > expectedPrefix.count
         }
 
-        return host == "objects.githubusercontent.com" || host == "release-assets.githubusercontent.com"
+        if allowRedirectHosts && (host == "objects.githubusercontent.com" || host == "release-assets.githubusercontent.com") {
+            return normalizedPath.count > 1
+        }
+
+        return false
     }
 
     nonisolated static func isValidReleasePageURL(_ url: URL) -> Bool {
         guard url.scheme?.lowercased() == "https",
-              url.host?.lowercased() == "github.com" else {
+              url.user == nil,
+              url.password == nil,
+              (url.port == nil || url.port == 443),
+              url.host?.lowercased() == "github.com",
+              !hasUnsafePathTraversal(url) else {
             return false
         }
         let expectedPrefix = "/\(repositoryOwner.lowercased())/\(repositoryName.lowercased())/"
-        return url.path.lowercased().hasPrefix(expectedPrefix)
+        return url.standardized.path.lowercased().hasPrefix(expectedPrefix)
+    }
+
+    nonisolated static func computeFileSHA256(at fileURL: URL, maxBytes: Int64 = maxUpdateArchiveBytes) throws -> String {
+        let values = try fileURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard values.isRegularFile == true, values.isSymbolicLink == false else {
+            throw UpdateError.verificationFailed("Downloaded update file is missing or invalid.")
+        }
+        if let fileSize = values.fileSize, Int64(fileSize) > maxBytes {
+            throw UpdateError.verificationFailed("Update archive exceeds maximum allowed size.")
+        }
+
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+
+        var hasher = SHA256()
+        var totalBytesRead: Int64 = 0
+        let chunkSize = 65_536
+
+        while true {
+            let chunk = try handle.read(upToCount: chunkSize) ?? Data()
+            if chunk.isEmpty {
+                break
+            }
+            totalBytesRead += Int64(chunk.count)
+            if totalBytesRead > maxBytes {
+                throw UpdateError.verificationFailed("Update archive exceeds maximum allowed size.")
+            }
+            hasher.update(data: chunk)
+        }
+
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     nonisolated static func extractSHA256(
@@ -585,7 +715,16 @@ final class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegat
         return values.isDirectory == true && values.isSymbolicLink == false
     }
 
-    nonisolated static func verifyAppBundleSignature(at bundleURL: URL) throws {
+    nonisolated static func verifyAppBundleSignature(
+        at bundleURL: URL,
+        requiredTeamID: String? = UpdateManager.currentBundleTeamIdentifier()
+    ) throws {
+        guard let teamID = requiredTeamID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !teamID.isEmpty,
+              teamID.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) else {
+            throw UpdateError.verificationFailed("Automatic installation requires an Apple Developer ID-signed build. Please download updates manually from GitHub Releases.")
+        }
+
         let infoPlistURL = bundleURL.appendingPathComponent("Contents/Info.plist")
         let plistData = try Data(contentsOf: infoPlistURL)
         guard let plist = try PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any],
@@ -623,17 +762,15 @@ final class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegat
             throw UpdateError.verificationFailed("Update signing identifier did not match \(expectedBundleIdentifier).")
         }
 
-        if let currentTeamID = currentBundleTeamIdentifier() {
-            let requirementString = "identifier \"\(expectedBundleIdentifier)\" and anchor apple generic and certificate leaf[subject.OU] = \"\(currentTeamID)\""
-            var requirement: SecRequirement?
-            let reqStatus = SecRequirementCreateWithString(requirementString as CFString, [], &requirement)
-            guard reqStatus == errSecSuccess, let requirement else {
-                throw UpdateError.verificationFailed("Failed to create Team ID signature requirement (OSStatus \(reqStatus)).")
-            }
-            let teamValidityStatus = SecStaticCodeCheckValidity(staticCode, checkFlags, requirement)
-            guard teamValidityStatus == errSecSuccess else {
-                throw UpdateError.verificationFailed("Update signature does not match current Developer ID team (OSStatus \(teamValidityStatus)).")
-            }
+        let requirementString = "identifier \"\(expectedBundleIdentifier)\" and anchor apple generic and certificate leaf[subject.OU] = \"\(teamID)\""
+        var requirement: SecRequirement?
+        let reqStatus = SecRequirementCreateWithString(requirementString as CFString, [], &requirement)
+        guard reqStatus == errSecSuccess, let requirement else {
+            throw UpdateError.verificationFailed("Failed to create Team ID signature requirement (OSStatus \(reqStatus)).")
+        }
+        let teamValidityStatus = SecStaticCodeCheckValidity(staticCode, checkFlags, requirement)
+        guard teamValidityStatus == errSecSuccess else {
+            throw UpdateError.verificationFailed("Update signature does not match current Developer ID team (OSStatus \(teamValidityStatus)).")
         }
     }
 
@@ -670,22 +807,36 @@ final class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegat
     }
 
     private func showUpdateAvailableAlert(_ release: AppRelease) {
+        let canAutoInstall = supportsVerifiedAutoInstall && release.downloadURL != nil && release.expectedSHA256 != nil
         let alert = NSAlert()
         alert.messageText = "Update Available: \(release.tagName)"
-        alert.informativeText = "A new version of Gmail Push Bridge is available.\n\nCurrent version: \(currentVersion)\nNew version: \(release.version)\n\nWould you like to install it now?"
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "Install Update")
-        alert.addButton(withTitle: "View Release Notes…")
-        alert.addButton(withTitle: "Later")
 
-        let response = alert.runModal()
-        switch response {
-        case .alertFirstButtonReturn: // Install Update
-            downloadAndInstallUpdate(release)
-        case .alertSecondButtonReturn: // View Release Notes
-            NSWorkspace.shared.open(release.htmlURL)
-        default:
-            break
+        if canAutoInstall {
+            alert.informativeText = "A new version of Gmail Push Bridge is available.\n\nCurrent version: \(currentVersion)\nNew version: \(release.version)\n\nWould you like to install it now?"
+            alert.addButton(withTitle: "Install Update")
+            alert.addButton(withTitle: "View Release Notes…")
+            alert.addButton(withTitle: "Later")
+
+            let response = alert.runModal()
+            switch response {
+            case .alertFirstButtonReturn: // Install Update
+                downloadAndInstallUpdate(release)
+            case .alertSecondButtonReturn: // View Release Notes
+                if Self.isValidReleasePageURL(release.htmlURL) {
+                    NSWorkspace.shared.open(release.htmlURL)
+                }
+            default:
+                break
+            }
+        } else {
+            alert.informativeText = "A new version of Gmail Push Bridge is available.\n\nCurrent version: \(currentVersion)\nNew version: \(release.version)\n\nAutomatic installation is disabled on un-notarized/ad-hoc builds or releases without a SHA-256 checksum. Download the update directly from GitHub Releases."
+            alert.addButton(withTitle: "Download on GitHub…")
+            alert.addButton(withTitle: "Later")
+
+            if alert.runModal() == .alertFirstButtonReturn, Self.isValidReleasePageURL(release.htmlURL) {
+                NSWorkspace.shared.open(release.htmlURL)
+            }
         }
     }
 

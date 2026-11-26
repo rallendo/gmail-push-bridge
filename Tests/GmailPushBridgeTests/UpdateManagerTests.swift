@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 @testable import GmailPushBridge
 
@@ -42,6 +43,29 @@ final class UpdateManagerTests: XCTestCase {
         XCTAssertFalse(UpdateManager.isValidDownloadURL(
             URL(string: "https://evil.example.com/GmailPushBridge.zip")!
         ))
+        XCTAssertFalse(UpdateManager.isValidDownloadURL(
+            URL(string: "https://github.com/rallendo/gmail-push-bridge/releases/download/../../other/repo/evil.zip")!
+        ))
+        XCTAssertFalse(UpdateManager.isValidDownloadURL(
+            URL(string: "https://github.com/rallendo/gmail-push-bridge/releases/download/%2e%2e/%2e%2e/other/repo/evil.zip")!
+        ))
+        XCTAssertFalse(UpdateManager.isValidDownloadURL(
+            URL(string: "https://github.com/rallendo/gmail-push-bridge/releases/download/v1%2f..%2fevil.zip")!
+        ))
+        XCTAssertFalse(UpdateManager.isValidDownloadURL(
+            URL(string: "https://user@github.com/rallendo/gmail-push-bridge/releases/download/v1.5.0/GmailPushBridge.zip")!
+        ))
+        XCTAssertFalse(UpdateManager.isValidDownloadURL(
+            URL(string: "https://github.com:8443/rallendo/gmail-push-bridge/releases/download/v1.5.0/GmailPushBridge.zip")!
+        ))
+        XCTAssertFalse(UpdateManager.isValidDownloadURL(
+            URL(string: "https://objects.githubusercontent.com/github-production-release-asset-2e65be/12345")!,
+            allowRedirectHosts: false
+        ))
+        XCTAssertFalse(UpdateManager.isValidDownloadURL(
+            URL(string: "https://release-assets.githubusercontent.com/github-production-release-asset/asset.zip")!,
+            allowRedirectHosts: false
+        ))
     }
 
     func testValidReleasePageURLs() {
@@ -58,6 +82,38 @@ final class UpdateManagerTests: XCTestCase {
         XCTAssertFalse(UpdateManager.isValidReleasePageURL(
             URL(string: "https://evil.example.com/rallendo/gmail-push-bridge/releases")!
         ))
+        XCTAssertFalse(UpdateManager.isValidReleasePageURL(
+            URL(string: "https://github.com/rallendo/gmail-push-bridge/../../other/repo")!
+        ))
+        XCTAssertFalse(UpdateManager.isValidReleasePageURL(
+            URL(string: "https://github.com/rallendo/gmail-push-bridge/%2e%2e/other")!
+        ))
+        XCTAssertFalse(UpdateManager.isValidReleasePageURL(
+            URL(string: "https://user@github.com/rallendo/gmail-push-bridge/releases")!
+        ))
+    }
+
+    func testComputeFileSHA256AndVerifySignatureFailsClosed() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("UpdateManagerSecurityTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+
+        let payload = Data("hello-verified-archive".utf8)
+        let fileURL = tempDir.appendingPathComponent("archive.zip")
+        try payload.write(to: fileURL)
+
+        let expectedHex = SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
+        XCTAssertEqual(try UpdateManager.computeFileSHA256(at: fileURL, maxBytes: 1024), expectedHex)
+
+        XCTAssertThrowsError(try UpdateManager.computeFileSHA256(at: fileURL, maxBytes: 5))
+
+        // Signing verification must fail closed when no Developer ID Team ID is present
+        let dummyBundle = tempDir.appendingPathComponent("GmailPushBridge.app")
+        try FileManager.default.createDirectory(at: dummyBundle, withIntermediateDirectories: true)
+        XCTAssertThrowsError(try UpdateManager.verifyAppBundleSignature(at: dummyBundle, requiredTeamID: nil))
     }
 
     func testExtractSHA256() {

@@ -50,6 +50,20 @@ struct LaunchAgentManager {
         return isApprovedApplicationPath(bundleURL.path)
     }
 
+    nonisolated static func resolvedExecutablePath(bundleURL: URL, executableURL: URL) -> String? {
+        guard let execValues = try? executableURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
+              execValues.isRegularFile == true,
+              execValues.isSymbolicLink == false else {
+            return nil
+        }
+        let resolvedBundle = bundleURL.resolvingSymlinksInPath().standardizedFileURL.path
+        let resolvedExec = executableURL.resolvingSymlinksInPath().standardizedFileURL.path
+        guard resolvedExec.hasPrefix("\(resolvedBundle)/Contents/MacOS/") else {
+            return nil
+        }
+        return resolvedExec
+    }
+
     static func setEnabled(_ enabled: Bool, allowNonStandardLocation: Bool = false) throws {
         let fm = FileManager.default
         if enabled {
@@ -59,9 +73,7 @@ struct LaunchAgentManager {
             }
 
             guard let execURL = Bundle.main.executableURL,
-                  let execValues = try? execURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
-                  execValues.isRegularFile == true,
-                  execValues.isSymbolicLink == false else {
+                  let resolvedExecPath = resolvedExecutablePath(bundleURL: bundleURL, executableURL: execURL) else {
                 throw LaunchAgentError.invalidExecutablePath
             }
 
@@ -70,7 +82,7 @@ struct LaunchAgentManager {
 
             let plistDict: [String: Any] = [
                 "Label": label,
-                "ProgramArguments": [execURL.path],
+                "ProgramArguments": [resolvedExecPath],
                 "RunAtLoad": true,
                 "KeepAlive": true,
                 "ProcessType": "Standard"
@@ -82,6 +94,7 @@ struct LaunchAgentManager {
                 options: 0
             )
             try data.write(to: plistURL, options: .atomic)
+            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: plistURL.path)
         } else {
             if fm.fileExists(atPath: plistURL.path) {
                 try fm.removeItem(at: plistURL)

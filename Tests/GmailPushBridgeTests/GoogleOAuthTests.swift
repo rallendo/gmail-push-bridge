@@ -186,4 +186,44 @@ final class GoogleOAuthTests: XCTestCase {
             XCTFail("Unexpected error: \(error)")
         }
     }
+
+    func testFormURLEncodedBodyEncodesReservedCharacters() {
+        let bodyData = GoogleOAuthManager.formURLEncodedBody([
+            "client_secret": "ab+cd/ef=gh&ij kl",
+            "grant_type": "authorization_code"
+        ])
+        let body = String(data: bodyData, encoding: .utf8)
+        XCTAssertEqual(
+            body,
+            "client_secret=ab%2Bcd%2Fef%3Dgh%26ij%20kl&grant_type=authorization_code"
+        )
+    }
+
+    func testConstantTimeEqual() {
+        XCTAssertTrue(GoogleOAuthManager.constantTimeEqual("state-abc-123", "state-abc-123"))
+        XCTAssertFalse(GoogleOAuthManager.constantTimeEqual("state-abc-123", "state-abc-124"))
+        XCTAssertFalse(GoogleOAuthManager.constantTimeEqual("short", "longer-string"))
+    }
+
+    func testLoopbackParseHTTPRequestValidatesMethodAndHost() {
+        let validReq = "GET /oauth2callback?code=abc&state=xyz HTTP/1.1\r\nHost: 127.0.0.1:54321\r\n\r\n"
+        let validParsed = LoopbackCallbackServer.parseHTTPRequest(validReq, expectedPort: 54321)
+        XCTAssertEqual(validParsed.method, "GET")
+        XCTAssertEqual(validParsed.path, "/oauth2callback")
+        XCTAssertTrue(validParsed.hostValid)
+        XCTAssertEqual(validParsed.query["code"], "abc")
+
+        let postReq = "POST /oauth2callback?code=abc&state=xyz HTTP/1.1\r\nHost: 127.0.0.1:54321\r\n\r\n"
+        let postParsed = LoopbackCallbackServer.parseHTTPRequest(postReq, expectedPort: 54321)
+        XCTAssertEqual(postParsed.method, "POST")
+        XCTAssertTrue(postParsed.hostValid)
+
+        let evilHostReq = "GET /oauth2callback?code=abc&state=xyz HTTP/1.1\r\nHost: evil.example.com\r\n\r\n"
+        let evilHostParsed = LoopbackCallbackServer.parseHTTPRequest(evilHostReq, expectedPort: 54321)
+        XCTAssertFalse(evilHostParsed.hostValid)
+
+        let wrongPortReq = "GET /oauth2callback?code=abc&state=xyz HTTP/1.1\r\nHost: 127.0.0.1:12345\r\n\r\n"
+        let wrongPortParsed = LoopbackCallbackServer.parseHTTPRequest(wrongPortReq, expectedPort: 54321)
+        XCTAssertFalse(wrongPortParsed.hostValid)
+    }
 }

@@ -384,4 +384,30 @@ final class IMAPIdleClientTests: XCTestCase {
         })
         XCTAssertEqual(client.sentCommandsForTesting.last, "A0011 IDLE\r\n")
     }
+
+    func testCommandRecordingDisabledAndClearedOnStop() {
+        let disconnectedExpectation = expectation(description: "stop clears sentCommandsForTesting")
+        let client = IMAPIdleClient { event in
+            if case .stateChanged(.disconnected) = event {
+                disconnectedExpectation.fulfill()
+            }
+        }
+
+        // When recordCommands is false (production default via start), LOGIN/IDLE commands are not retained
+        let config = makeConfiguration(credentialMode: .appPassword("super-secret-pass"))
+        client.configureForTesting(config, recordCommands: false)
+        client.receiveRawDataForTesting(Data("* OK Gimap ready\r\n".utf8))
+        client.receiveRawDataForTesting(Data("A0001 OK authenticated\r\n".utf8))
+        client.receiveRawDataForTesting(Data("A0002 OK INBOX selected\r\n".utf8))
+        XCTAssertTrue(client.sentCommandsForTesting.isEmpty)
+
+        // When recording is enabled, stop() wipes any retained commands
+        client.configureForTesting(config, recordCommands: true)
+        client.receiveRawDataForTesting(Data("* OK Gimap ready\r\n".utf8))
+        XCTAssertFalse(client.sentCommandsForTesting.isEmpty)
+
+        client.stop()
+        wait(for: [disconnectedExpectation], timeout: 2.0)
+        XCTAssertTrue(client.sentCommandsForTesting.isEmpty)
+    }
 }

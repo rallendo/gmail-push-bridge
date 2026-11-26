@@ -158,7 +158,7 @@
 
   <main>
     <h1>Privacy Policy</h1>
-    <div class="meta">Effective Date: November 16, 2026 | Last Updated: November 16, 2026</div>
+    <div class="meta">Effective Date: November 16, 2026 | Last Updated: November 26, 2026</div>
 
     <p>This Privacy Policy explains how <strong>Gmail Push Bridge</strong> ("we", "our", or "the Application"), developed by Rick Allendoerfer, accesses, handles, and protects your information when you use our open-source macOS utility.</p>
 
@@ -166,19 +166,19 @@
     <p>Gmail Push Bridge is designed strictly to operate locally on your Apple Mac:</p>
     <ul>
       <li><strong>Direct IMAP Connection:</strong> The Application connects directly from your Mac to Google's official IMAP mail servers (<code>imap.gmail.com:993</code>) via TLS. We do not operate any intermediate servers, cloud relays, web services, or databases.</li>
-      <li><strong>Local Keychain Storage:</strong> OAuth tokens (access tokens, refresh tokens) and App Passwords are stored exclusively in your local macOS Keychain under service <code>com.gmailpushbridge.app</code> (<code>kSecClassGenericPassword</code>). They never leave your device.</li>
+      <li><strong>Local Keychain Storage:</strong> OAuth tokens (access tokens, refresh tokens), OAuth Client Secrets, and App Passwords are stored exclusively in a consolidated vault (<code>credentials_vault</code>) inside your local macOS Keychain under service <code>com.gmailpushbridge.app</code> (<code>kSecClassGenericPassword</code>, accessibility <code>kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly</code>). They never leave your device and are not synced via iCloud Keychain.</li>
       <li><strong>Zero Tracking or Analytics:</strong> The Application does not contain any third-party tracking SDKs, analytics, crash-reporting telemetry, or advertising libraries.</li>
     </ul>
 
     <h2>2. Google User Data & OAuth Scopes</h2>
     <p>When you choose to authenticate using <strong>Sign in with Google</strong> (OAuth 2.0 with PKCE), the Application requests the following scopes:</p>
     <ul>
-      <li><code>https://mail.google.com/</code> (Restricted Scope: Full IMAP access) &mdash; <em>Required by Google's IMAP server to perform SASL <code>XOAUTH2</code> authentication and establish an IMAP <code>IDLE</code> connection to listen for real-time mailbox count notifications (<code>EXISTS</code>).</em></li>
+      <li><code>https://mail.google.com/</code> (Restricted Scope: Full IMAP access) &mdash; <em>Required by Google's IMAP server to perform SASL <code>XOAUTH2</code> authentication and establish an IMAP <code>IDLE</code> connection to listen for real-time mailbox updates.</em></li>
       <li><code>email</code> &mdash; <em>Used solely to retrieve your verified Gmail address to auto-populate the local configuration field.</em></li>
     </ul>
 
     <h3>Data Accessed vs. Data Read</h3>
-    <p>The Application only reads the count of messages in your <code>INBOX</code> to detect when a new email arrives. <strong>The Application never reads, collects, inspects, stores, or transmits the body, subject line, sender, or attachments of your emails.</strong> When a new email arrives, Gmail Push Bridge signals your local Apple Mail client (<code>Mail.app</code>) via AppleScript to perform its native fetch directly from Google.</p>
+    <p>The Application monitors IMAP status events (<code>EXISTS</code>, <code>EXPUNGE</code>, and system flag changes in <code>FETCH (FLAGS)</code>) and—when Gmail Category Push Filtering is enabled—runs server-side <code>SEARCH X-GM-RAW</code> queries (e.g., <code>category:primary</code>, <code>is:important</code>) returning only sequence numbers. <strong>The Application never downloads, reads, collects, inspects, stores, or transmits the body, headers, subject line, sender, or attachments of your emails.</strong> When a matching event arrives, Gmail Push Bridge signals your local Apple Mail client (<code>Mail.app</code>) via AppleScript to perform its native fetch directly from Google.</p>
 
     <div class="callout">
       <strong>Google API Services User Data Policy Compliance</strong>
@@ -198,7 +198,7 @@
     <p>Because all data resides exclusively on your local device:</p>
     <ul>
       <li>You can revoke the Application's access at any time through your Google Security settings at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">myaccount.google.com/permissions</a>.</li>
-      <li>Clicking <strong>Sign Out</strong> (for OAuth 2.0, which also requests revocation at Google) or <strong>Remove App Password</strong> inside the Application immediately purges those credentials from your macOS Keychain.</li>
+      <li>Clicking <strong>Sign Out</strong> inside the Application removes and revokes your OAuth access/refresh tokens while preserving your OAuth Client ID &amp; Secret for convenient re-sign-in; clicking <strong>Remove</strong> next to <strong>Client Secret Saved</strong> deletes the OAuth Client Secret from Keychain, and clicking <strong>Remove App Password</strong> purges your stored App Password immediately.</li>
       <li>Deleting the application removes all application binaries and configuration from your Mac.</li>
     </ul>
 

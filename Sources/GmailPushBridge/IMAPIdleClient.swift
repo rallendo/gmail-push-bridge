@@ -116,6 +116,7 @@ final class IMAPIdleClient: @unchecked Sendable {
     private var idleRenewalTimer: DispatchSourceTimer?
     private var commandWatchdogTimer: DispatchSourceTimer?
     private var reconnectWorkItem: DispatchWorkItem?
+    private var isRecordingCommandsForTesting: Bool = false
     private(set) var sentCommandsForTesting: [String] = []
 
     init(eventHandler: @escaping @Sendable (IMAPClientEvent) -> Void) {
@@ -128,6 +129,8 @@ final class IMAPIdleClient: @unchecked Sendable {
             self.config = configuration
             self.isStopped = false
             self.reconnectAttempt = 0
+            self.isRecordingCommandsForTesting = false
+            self.sentCommandsForTesting.removeAll(keepingCapacity: false)
             self.connectInternal()
         }
     }
@@ -140,6 +143,7 @@ final class IMAPIdleClient: @unchecked Sendable {
             self.reconnectWorkItem?.cancel()
             self.reconnectWorkItem = nil
             self.teardownConnection()
+            self.sentCommandsForTesting.removeAll(keepingCapacity: false)
             self.eventHandler(.stateChanged(.disconnected))
         }
     }
@@ -193,7 +197,7 @@ final class IMAPIdleClient: @unchecked Sendable {
         }
     }
 
-    func configureForTesting(_ configuration: IMAPConfiguration) {
+    func configureForTesting(_ configuration: IMAPConfiguration, recordCommands: Bool = true) {
         cancelTimers()
         teardownConnection()
         config = configuration
@@ -204,6 +208,7 @@ final class IMAPIdleClient: @unchecked Sendable {
         knownExistsCount = nil
         pendingSelectFilterRange = nil
         reconnectAttempt = 0
+        isRecordingCommandsForTesting = recordCommands
         sentCommandsForTesting.removeAll()
     }
 
@@ -629,7 +634,9 @@ final class IMAPIdleClient: @unchecked Sendable {
     // MARK: - Helpers & Timers
 
     private func sendRaw(_ command: String, redactLogAs redacted: String? = nil) {
-        sentCommandsForTesting.append(command)
+        if isRecordingCommandsForTesting {
+            sentCommandsForTesting.append(command)
+        }
         guard let connection else { return }
         let data = Data(command.utf8)
         connection.send(content: data, completion: .contentProcessed { [weak self] error in

@@ -394,4 +394,45 @@ final class KeychainStoreTests: XCTestCase {
 
         XCTAssertEqual(backend.counts().readData, 0)
     }
+
+    func testManifestUsesSaltedHMACAndRemainsCompatibleWithLegacyUnsaltedManifest() throws {
+        let tokens = makeSampleTokenSet(clientId: "client-hmac", clientSecret: "secret-hmac")
+        try KeychainStore.saveOAuthTokens(tokens, for: "alice@gmail.com")
+
+        let item = try XCTUnwrap(backend.item(account: KeychainStore.vaultAccountKey))
+        let genericData = try XCTUnwrap(item.genericData)
+        let manifest = try JSONDecoder().decode(VaultManifest.self, from: genericData)
+
+        let salt = try XCTUnwrap(manifest.salt)
+        XCTAssertFalse(salt.isEmpty)
+        XCTAssertFalse(manifest.oauthTokenHashes.contains(VaultManifest.hashKey("alice@gmail.com")))
+        XCTAssertTrue(manifest.matchesOAuthToken(normalizedEmail: "alice@gmail.com"))
+
+        // Legacy v1.5.0 unsalted manifest (no "salt" field in JSON) still decodes and matches prompt-free checks
+        let legacyEmailHash = VaultManifest.hashKey("legacy@gmail.com")
+        let legacyAppPassHash = VaultManifest.hashKey("legacy@gmail.com")
+        let legacyClientHash = VaultManifest.hashKey("legacy-client.apps.googleusercontent.com")
+        let legacyManifestJSON = """
+        {
+          "oauthTokenHashes": ["\(legacyEmailHash)"],
+          "oauthTokenClientIdHashes": ["\(legacyClientHash)"],
+          "oauthClientSecretHashes": ["\(legacyClientHash)"],
+          "appPasswordHashes": ["\(legacyAppPassHash)"]
+        }
+        """
+
+        KeychainStore.clearCacheForTesting()
+        backend.seedItem(
+            account: KeychainStore.vaultAccountKey,
+            data: Data("{}".utf8),
+            genericData: Data(legacyManifestJSON.utf8)
+        )
+        backend.resetCounters()
+
+        XCTAssertTrue(KeychainStore.hasOAuthTokens(for: "legacy@gmail.com"))
+        XCTAssertTrue(KeychainStore.hasAppPassword(for: "legacy@gmail.com"))
+        XCTAssertTrue(KeychainStore.hasOAuthClientSecret(forClientId: "legacy-client.apps.googleusercontent.com"))
+        XCTAssertFalse(KeychainStore.hasOAuthTokens(for: "other@gmail.com"))
+        XCTAssertEqual(backend.counts().readData, 0)
+    }
 }

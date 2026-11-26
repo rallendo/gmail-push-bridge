@@ -27,42 +27,75 @@ struct CredentialsVault: Codable, Equatable, Sendable {
 }
 
 struct VaultManifest: Codable, Equatable, Sendable {
+    var salt: String? = nil
     var oauthTokenHashes: Set<String> = []
     var oauthTokenClientIdHashes: Set<String> = []
     var oauthClientSecretHashes: Set<String> = []
     var appPasswordHashes: Set<String> = []
 
-    static func hashKey(_ normalizedKey: String) -> String {
+    static func generateSalt() -> String {
+        var bytes = [UInt8](repeating: 0, count: 16)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        guard status == errSecSuccess else {
+            fatalError("SecRandomCopyBytes failed with OSStatus \(status)")
+        }
+        return bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func hashKey(_ normalizedKey: String, salt: String?) -> String {
+        if let salt, !salt.isEmpty {
+            let key = SymmetricKey(data: Data(salt.utf8))
+            let mac = HMAC<SHA256>.authenticationCode(for: Data(normalizedKey.utf8), using: key)
+            return mac.map { String(format: "%02x", $0) }.joined()
+        }
         let digest = SHA256.hash(data: Data(normalizedKey.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    static func from(vault: CredentialsVault) -> VaultManifest {
-        var manifest = VaultManifest()
+    static func hashKey(_ normalizedKey: String) -> String {
+        hashKey(normalizedKey, salt: nil)
+    }
+
+    func matchesOAuthToken(normalizedEmail: String) -> Bool {
+        oauthTokenHashes.contains(Self.hashKey(normalizedEmail, salt: salt))
+    }
+
+    func matchesAppPassword(normalizedEmail: String) -> Bool {
+        appPasswordHashes.contains(Self.hashKey(normalizedEmail, salt: salt))
+    }
+
+    func matchesOAuthClientSecret(normalizedClientId: String) -> Bool {
+        let hash = Self.hashKey(normalizedClientId, salt: salt)
+        return oauthClientSecretHashes.contains(hash) || oauthTokenClientIdHashes.contains(hash)
+    }
+
+    static func from(vault: CredentialsVault, salt: String? = nil) -> VaultManifest {
+        let resolvedSalt = (salt?.isEmpty == false) ? salt! : generateSalt()
+        var manifest = VaultManifest(salt: resolvedSalt)
         for email in vault.oauthTokens.keys {
             let normalized = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if !normalized.isEmpty {
-                manifest.oauthTokenHashes.insert(hashKey(normalized))
+                manifest.oauthTokenHashes.insert(hashKey(normalized, salt: resolvedSalt))
             }
         }
         for token in vault.oauthTokens.values {
             let normalizedClientId = token.clientId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let secret = token.clientSecret?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !normalizedClientId.isEmpty && !secret.isEmpty {
-                manifest.oauthTokenClientIdHashes.insert(hashKey(normalizedClientId))
+                manifest.oauthTokenClientIdHashes.insert(hashKey(normalizedClientId, salt: resolvedSalt))
             }
         }
         for (clientId, secret) in vault.oauthClientSecrets {
             let normalizedClientId = clientId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let trimmedSecret = secret.trimmingCharacters(in: .whitespacesAndNewlines)
             if !normalizedClientId.isEmpty && !trimmedSecret.isEmpty {
-                manifest.oauthClientSecretHashes.insert(hashKey(normalizedClientId))
+                manifest.oauthClientSecretHashes.insert(hashKey(normalizedClientId, salt: resolvedSalt))
             }
         }
         for email in vault.appPasswords.keys {
             let normalized = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if !normalized.isEmpty {
-                manifest.appPasswordHashes.insert(hashKey(normalized))
+                manifest.appPasswordHashes.insert(hashKey(normalized, salt: resolvedSalt))
             }
         }
         return manifest
@@ -140,7 +173,7 @@ struct SystemKeychainBackend: KeychainBackend {
 
         var attributes: [String: Any] = [
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
         if let genericData {
             attributes[kSecAttrGeneric as String] = genericData
@@ -390,7 +423,6 @@ private final class VaultStore: @unchecked Sendable {
     func hasOAuthTokens(for account: String) -> Bool {
         let normalized = normalizeKey(account)
         guard !normalized.isEmpty else { return false }
-        let hash = VaultManifest.hashKey(normalized)
 
         switch inspectVaultState() {
         case .loaded(let vault):
@@ -398,7 +430,7 @@ private final class VaultStore: @unchecked Sendable {
                 return true
             }
         case .manifest(let manifest):
-            if manifest.oauthTokenHashes.contains(hash) {
+            if manifest.matchesOAuthToken(normalizedEmail: normalized) {
                 return true
             }
         case .existsWithoutManifest:
@@ -413,7 +445,6 @@ private final class VaultStore: @unchecked Sendable {
     func hasAppPassword(for account: String) -> Bool {
         let normalized = normalizeKey(account)
         guard !normalized.isEmpty else { return false }
-        let hash = VaultManifest.hashKey(normalized)
 
         switch inspectVaultState() {
         case .loaded(let vault):
@@ -421,7 +452,7 @@ private final class VaultStore: @unchecked Sendable {
                 return true
             }
         case .manifest(let manifest):
-            if manifest.appPasswordHashes.contains(hash) {
+            if manifest.matchesAppPassword(normalizedEmail: normalized) {
                 return true
             }
         case .existsWithoutManifest:
@@ -435,7 +466,6 @@ private final class VaultStore: @unchecked Sendable {
 
     func hasOAuthClientSecret(forClientId clientId: String) -> Bool {
         guard let normalized = normalizeClientId(clientId) else { return false }
-        let hash = VaultManifest.hashKey(normalized)
 
         switch inspectVaultState() {
         case .loaded(let vault):
@@ -443,7 +473,7 @@ private final class VaultStore: @unchecked Sendable {
                 return true
             }
         case .manifest(let manifest):
-            if manifest.oauthClientSecretHashes.contains(hash) || manifest.oauthTokenClientIdHashes.contains(hash) {
+            if manifest.matchesOAuthClientSecret(normalizedClientId: normalized) {
                 return true
             }
         case .existsWithoutManifest:
@@ -523,7 +553,10 @@ private final class VaultStore: @unchecked Sendable {
             guard let vault = try? JSONDecoder().decode(CredentialsVault.self, from: data) else {
                 return .unreadable(errSecDecode)
             }
-            let manifest = VaultManifest.from(vault: vault)
+            cacheLock.lock()
+            let existingSalt = cachedManifest?.salt
+            cacheLock.unlock()
+            let manifest = VaultManifest.from(vault: vault, salt: existingSalt)
             cacheLock.lock()
             cachedVault = vault
             knownVaultAbsent = false
@@ -553,7 +586,10 @@ private final class VaultStore: @unchecked Sendable {
         guard let vaultData = try? encoder.encode(vault) else {
             return errSecParam
         }
-        let manifest = VaultManifest.from(vault: vault)
+        cacheLock.lock()
+        let existingSalt = cachedManifest?.salt
+        cacheLock.unlock()
+        let manifest = VaultManifest.from(vault: vault, salt: existingSalt)
         let manifestData = try? encoder.encode(manifest)
 
         let currentBackend = getBackend()
@@ -697,8 +733,7 @@ private final class VaultStore: @unchecked Sendable {
         ioLock.lock()
         defer { ioLock.unlock() }
 
-        let hash = VaultManifest.hashKey(normalized)
-        switch loadVaultForRead(manifestMatches: { $0.oauthTokenHashes.contains(hash) }) {
+        switch loadVaultForRead(manifestMatches: { $0.matchesOAuthToken(normalizedEmail: normalized) }) {
         case .loaded(let vault):
             if let tokens = vault.oauthTokens[normalized] {
                 return tokens
@@ -761,8 +796,7 @@ private final class VaultStore: @unchecked Sendable {
         ioLock.lock()
         defer { ioLock.unlock() }
 
-        let hash = VaultManifest.hashKey(normalized)
-        if case .loaded(var vault) = loadVaultForRead(manifestMatches: { $0.oauthTokenHashes.contains(hash) }),
+        if case .loaded(var vault) = loadVaultForRead(manifestMatches: { $0.matchesOAuthToken(normalizedEmail: normalized) }),
            vault.oauthTokens.removeValue(forKey: normalized) != nil {
             persistOrDeleteEmptyVault(vault)
         }
@@ -826,8 +860,7 @@ private final class VaultStore: @unchecked Sendable {
         ioLock.lock()
         defer { ioLock.unlock() }
 
-        let hash = VaultManifest.hashKey(normalized)
-        switch loadVaultForRead(manifestMatches: { $0.appPasswordHashes.contains(hash) }) {
+        switch loadVaultForRead(manifestMatches: { $0.matchesAppPassword(normalizedEmail: normalized) }) {
         case .loaded(let vault):
             if let password = vault.appPasswords[normalized] {
                 return password
@@ -882,8 +915,7 @@ private final class VaultStore: @unchecked Sendable {
         ioLock.lock()
         defer { ioLock.unlock() }
 
-        let hash = VaultManifest.hashKey(normalized)
-        if case .loaded(var vault) = loadVaultForRead(manifestMatches: { $0.appPasswordHashes.contains(hash) }),
+        if case .loaded(var vault) = loadVaultForRead(manifestMatches: { $0.matchesAppPassword(normalizedEmail: normalized) }),
            vault.appPasswords.removeValue(forKey: normalized) != nil {
             persistOrDeleteEmptyVault(vault)
         }
@@ -946,9 +978,8 @@ private final class VaultStore: @unchecked Sendable {
         ioLock.lock()
         defer { ioLock.unlock() }
 
-        let hash = VaultManifest.hashKey(normalizedClientId)
         switch loadVaultForRead(manifestMatches: {
-            $0.oauthClientSecretHashes.contains(hash) || $0.oauthTokenClientIdHashes.contains(hash)
+            $0.matchesOAuthClientSecret(normalizedClientId: normalizedClientId)
         }) {
         case .loaded(let vault):
             if let secret = extractClientSecret(from: vault, normalizedClientId: normalizedClientId) {
@@ -994,9 +1025,8 @@ private final class VaultStore: @unchecked Sendable {
         ioLock.lock()
         defer { ioLock.unlock() }
 
-        let hash = VaultManifest.hashKey(normalizedClientId)
         if case .loaded(var vault) = loadVaultForRead(manifestMatches: {
-            $0.oauthClientSecretHashes.contains(hash) || $0.oauthTokenClientIdHashes.contains(hash)
+            $0.matchesOAuthClientSecret(normalizedClientId: normalizedClientId)
         }) {
             var modified = vault.oauthClientSecrets.removeValue(forKey: normalizedClientId) != nil
             for (email, var token) in vault.oauthTokens where normalizeClientId(token.clientId) == normalizedClientId && token.clientSecret != nil {

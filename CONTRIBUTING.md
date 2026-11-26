@@ -21,7 +21,7 @@ Thank you for considering contributing to Gmail Push Bridge!
    ```
 3. Test your changes locally on macOS with Mail.app.
 4. Open a pull request against `main`. Fill in the PR checklist completely.
-5. All pull requests must pass automated CI checks and receive review from `@rallendo` before merging.
+5. All pull requests must pass `./scripts/run-tests.sh` locally and receive review from `@rallendo` before merging.
 
 ### Security
 If you identify a security issue, do **not** file a public issue. See [SECURITY.md](SECURITY.md) for instructions on confidential disclosure.

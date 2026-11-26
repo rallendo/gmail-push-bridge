@@ -153,6 +153,14 @@ final class BridgeCoordinator: ObservableObject {
         }
     }
 
+    func removeOAuthClientSecret() {
+        let clientId = settings.oauthClientId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clientId.isEmpty else { return }
+        KeychainStore.deleteOAuthClientSecret(forClientId: clientId)
+        settings.objectWillChange.send()
+        appendLog("Removed stored OAuth Client Secret from Keychain.")
+    }
+
     func removeAppPassword() {
         let email = settings.gmailAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         isWaitingForMail = false

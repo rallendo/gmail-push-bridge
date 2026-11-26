@@ -131,11 +131,15 @@ actor AppleMailBridge {
         }
     }
 
+    nonisolated static func buildOsascriptArguments(script: String, arguments: [String] = []) -> [String] {
+        ["-e", script, "--"] + arguments
+    }
+
     private func runOsascript(_ script: String, arguments: [String] = []) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", script] + arguments
+            process.arguments = Self.buildOsascriptArguments(script: script, arguments: arguments)
             process.qualityOfService = .utility
 
             let stdoutPipe = Pipe()
