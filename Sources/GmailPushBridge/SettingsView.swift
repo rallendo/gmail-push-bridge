@@ -40,13 +40,7 @@ struct SettingsView: View {
             OAuthSetupGuideSheet()
         }
         .onAppear {
-            if let existing = KeychainStore.loadAppPassword(for: settings.gmailAddress) {
-                appPasswordInput = existing
-            }
-            if let tokens = KeychainStore.loadOAuthTokens(for: settings.gmailAddress),
-               let secret = tokens.clientSecret {
-                oauthClientSecretInput = secret
-            }
+            syncCachedCredentialInputs()
             launchAtLogin = LaunchAgentManager.isEnabled
         }
     }
@@ -166,6 +160,12 @@ struct SettingsView: View {
                 HStack(spacing: 8) {
                     TextField("xxx.apps.googleusercontent.com", text: $settings.oauthClientId)
                         .textFieldStyle(.roundedBorder)
+                        .onChange(of: settings.oauthClientId) { newClientId in
+                            if newClientId.contains("."),
+                               let savedSecret = KeychainStore.cachedOAuthClientSecret(forClientId: newClientId) {
+                                oauthClientSecretInput = savedSecret
+                            }
+                        }
 
                     Button("Import client_secret.json…") {
                         importGoogleClientSecretJSON()
@@ -174,17 +174,30 @@ struct SettingsView: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                HStack {
+                HStack(spacing: 10) {
                     Text("OAuth Client Secret")
                         .font(.subheadline.weight(.medium))
                     Spacer()
+                    if settings.hasOAuthClientSecret {
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark.circle.fill")
+                            Text("Client Secret Saved")
+                        }
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.green)
+                    }
                     if let url = URL(string: "https://console.cloud.google.com/apis/credentials") {
                         Link("Google Cloud Credentials ↗", destination: url)
                             .font(.caption)
                     }
                 }
-                SecureField("Desktop Client Secret (from Google Cloud Console)", text: $oauthClientSecretInput)
-                    .textFieldStyle(.roundedBorder)
+                SecureField(
+                    settings.hasOAuthClientSecret
+                        ? "Saved in Keychain (leave blank to reuse)"
+                        : "Desktop Client Secret (from Google Cloud Console)",
+                    text: $oauthClientSecretInput
+                )
+                .textFieldStyle(.roundedBorder)
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -227,10 +240,15 @@ struct SettingsView: View {
                             coordinator.startMonitoring()
                         }
                         Button("Sign Out") {
+                            let currentSecret = oauthClientSecretInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !currentSecret.isEmpty {
+                                try? KeychainStore.saveOAuthClientSecret(currentSecret, forClientId: settings.oauthClientId)
+                            }
                             coordinator.signOutOAuth()
-                            oauthClientSecretInput = ""
-                            appPasswordInput = ""
-                            saveFeedback = "OAuth tokens removed."
+                            if currentSecret.isEmpty {
+                                syncCachedCredentialInputs()
+                            }
+                            saveFeedback = "Signed out. OAuth Client ID & Secret kept for easy re-sign-in."
                         }
                     }
 
@@ -280,8 +298,13 @@ struct SettingsView: View {
                             .font(.caption)
                     }
                 }
-                SecureField("16-character Google App Password", text: $appPasswordInput)
-                    .textFieldStyle(.roundedBorder)
+                SecureField(
+                    settings.hasAppPassword
+                        ? "Saved in Keychain (enter new to replace)"
+                        : "16-character Google App Password",
+                    text: $appPasswordInput
+                )
+                .textFieldStyle(.roundedBorder)
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -718,11 +741,26 @@ struct SettingsView: View {
         }
     }
 
+    private func syncCachedCredentialInputs() {
+        if let cachedPassword = KeychainStore.cachedAppPassword(for: settings.gmailAddress) {
+            appPasswordInput = cachedPassword
+        }
+        if let cachedSecret = KeychainStore.cachedOAuthClientSecret(forClientId: settings.oauthClientId) {
+            oauthClientSecretInput = cachedSecret
+        } else if let tokens = KeychainStore.cachedOAuthTokens(for: settings.gmailAddress),
+                  let tokenSecret = tokens.clientSecret?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !tokenSecret.isEmpty {
+            oauthClientSecretInput = tokenSecret
+        }
+    }
+
     private func startGoogleOAuthFlow() {
         saveFeedback = nil
         Task {
             do {
                 try await coordinator.signInWithGoogle(clientSecret: oauthClientSecretInput)
+                syncCachedCredentialInputs()
+                settings.objectWillChange.send()
                 saveFeedback = "Signed in as \(settings.gmailAddress) ✓"
             } catch {
                 saveFeedback = error.localizedDescription
@@ -754,10 +792,22 @@ struct SettingsView: View {
             let parsed = try JSONDecoder().decode(GoogleCredentialsFile.self, from: data)
             if let info = parsed.installed ?? parsed.web {
                 settings.oauthClientId = info.client_id
-                if let secret = info.client_secret {
+                if let secret = info.client_secret?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !secret.isEmpty {
                     oauthClientSecretInput = secret
+                    do {
+                        try KeychainStore.saveOAuthClientSecret(secret, forClientId: info.client_id)
+                        settings.objectWillChange.send()
+                        saveFeedback = "Imported OAuth Client ID & Secret ✓"
+                    } catch {
+                        saveFeedback = "Imported Client ID & Secret (Keychain save warning: \(error.localizedDescription))"
+                        coordinator.appendLog("Warning saving OAuth Client Secret to Keychain: \(error.localizedDescription)")
+                    }
+                } else {
+                    oauthClientSecretInput = KeychainStore.cachedOAuthClientSecret(forClientId: info.client_id) ?? ""
+                    settings.objectWillChange.send()
+                    saveFeedback = "Imported OAuth Client ID ✓"
                 }
-                saveFeedback = "Imported OAuth Client ID ✓"
                 coordinator.appendLog("Imported Google OAuth Client ID from \(url.lastPathComponent).")
             } else {
                 saveFeedback = "Invalid client_secret.json format."
@@ -776,7 +826,12 @@ struct SettingsView: View {
         let cleanedPassword = appPasswordInput
             .replacingOccurrences(of: " ", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanedPassword.isEmpty else {
+        if cleanedPassword.isEmpty {
+            if settings.hasAppPassword {
+                saveFeedback = "Using saved App Password ✓"
+                coordinator.startMonitoring()
+                return
+            }
             saveFeedback = "Enter your 16-character App Password."
             return
         }

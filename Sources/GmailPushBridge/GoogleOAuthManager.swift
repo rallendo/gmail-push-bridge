@@ -3,7 +3,7 @@ import CryptoKit
 import Foundation
 import Network
 
-struct OAuthTokenSet: Codable, Sendable {
+struct OAuthTokenSet: Codable, Sendable, Equatable {
     var accessToken: String
     var refreshToken: String
     var expiresAt: Date
@@ -22,6 +22,7 @@ struct OAuthSignInResult: Sendable {
 
 enum GoogleOAuthError: LocalizedError {
     case missingClientId
+    case missingClientSecret
     case listenerFailed(String)
     case invalidCallback(String)
     case stateMismatch
@@ -33,6 +34,8 @@ enum GoogleOAuthError: LocalizedError {
         switch self {
         case .missingClientId:
             return "Enter a Google OAuth Desktop Client ID first."
+        case .missingClientSecret:
+            return "Enter your Google OAuth Client Secret (or click 'Import client_secret.json…') before signing in."
         case .listenerFailed(let msg):
             return "Could not start local OAuth callback listener: \(msg)"
         case .invalidCallback(let msg):
@@ -71,6 +74,18 @@ actor GoogleOAuthManager {
 
     private var inFlightRefreshes: [String: Task<String, Error>] = [:]
 
+    nonisolated static func resolveClientSecret(explicit: String?, stored: @autoclosure () -> String?) -> String? {
+        if let explicitTrimmed = explicit?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !explicitTrimmed.isEmpty {
+            return explicitTrimmed
+        }
+        if let storedTrimmed = stored()?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !storedTrimmed.isEmpty {
+            return storedTrimmed
+        }
+        return nil
+    }
+
     /// Starts the interactive browser OAuth 2.0 + PKCE flow (supports Passkeys / Touch ID in Safari/Chrome).
     func signInWithBrowser(
         clientId: String,
@@ -81,8 +96,12 @@ actor GoogleOAuthManager {
         guard !trimmedClientId.isEmpty else {
             throw GoogleOAuthError.missingClientId
         }
-        let trimmedSecret = clientSecret?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let secretOrNil = (trimmedSecret?.isEmpty == false) ? trimmedSecret : nil
+        guard let resolvedSecret = Self.resolveClientSecret(
+            explicit: clientSecret,
+            stored: KeychainStore.loadOAuthClientSecret(forClientId: trimmedClientId)
+        ) else {
+            throw GoogleOAuthError.missingClientSecret
+        }
 
         let codeVerifier = Self.generateCodeVerifier()
         let codeChallenge = Self.codeChallenge(for: codeVerifier)
@@ -148,7 +167,7 @@ actor GoogleOAuthManager {
             codeVerifier: codeVerifier,
             redirectURI: redirectURI,
             clientId: trimmedClientId,
-            clientSecret: secretOrNil
+            clientSecret: resolvedSecret
         )
 
         guard let refreshToken = tokenResponse.refresh_token, !refreshToken.isEmpty else {
@@ -163,10 +182,11 @@ actor GoogleOAuthManager {
             refreshToken: refreshToken,
             expiresAt: Date().addingTimeInterval(TimeInterval(tokenResponse.expires_in)),
             clientId: trimmedClientId,
-            clientSecret: secretOrNil
+            clientSecret: resolvedSecret
         )
 
         try KeychainStore.saveOAuthTokens(tokenSet, for: resolvedEmail)
+        try? KeychainStore.saveOAuthClientSecret(resolvedSecret, forClientId: trimmedClientId)
         return OAuthSignInResult(email: resolvedEmail, tokens: tokenSet)
     }
 
@@ -187,6 +207,9 @@ actor GoogleOAuthManager {
 
         let task = Task<String, Error> {
             var updatedTokens = tokens
+            if updatedTokens.clientSecret?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                updatedTokens.clientSecret = KeychainStore.loadOAuthClientSecret(forClientId: updatedTokens.clientId)
+            }
             let refreshed = try await self.refreshAccessToken(tokens: updatedTokens)
             updatedTokens.accessToken = refreshed.access_token
             updatedTokens.expiresAt = Date().addingTimeInterval(TimeInterval(refreshed.expires_in))
@@ -264,7 +287,10 @@ actor GoogleOAuthManager {
             "refresh_token": tokens.refreshToken,
             "grant_type": "refresh_token"
         ]
-        if let secret = tokens.clientSecret, !secret.isEmpty {
+        if let secret = Self.resolveClientSecret(
+            explicit: tokens.clientSecret,
+            stored: KeychainStore.loadOAuthClientSecret(forClientId: tokens.clientId)
+        ) {
             params["client_secret"] = secret
         }
         return try await postTokenRequest(params: params)
@@ -273,6 +299,7 @@ actor GoogleOAuthManager {
     private func postTokenRequest(params: [String: String]) async throws -> TokenResponse {
         var request = URLRequest(url: URL(string: "https://oauth2.googleapis.com/token")!)
         request.httpMethod = "POST"
+        request.timeoutInterval = 15
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
 
         var components = URLComponents()

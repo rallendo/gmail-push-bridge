@@ -356,13 +356,19 @@ final class AppSettings: ObservableObject {
     var hasOAuthTokens: Bool {
         let email = gmailAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !email.isEmpty else { return false }
-        return KeychainStore.loadOAuthTokens(for: email) != nil
+        return KeychainStore.hasOAuthTokens(for: email)
+    }
+
+    var hasOAuthClientSecret: Bool {
+        let clientId = oauthClientId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clientId.isEmpty else { return false }
+        return KeychainStore.hasOAuthClientSecret(forClientId: clientId)
     }
 
     var hasAppPassword: Bool {
         let email = gmailAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !email.isEmpty else { return false }
-        return sanitizedAppPassword() != nil
+        return KeychainStore.hasAppPassword(for: email)
     }
 
     var isConfigured: Bool {
@@ -372,7 +378,7 @@ final class AppSettings: ObservableObject {
         case .oauth2:
             return hasOAuthTokens
         case .appPassword:
-            return sanitizedAppPassword() != nil
+            return hasAppPassword
         }
     }
 }

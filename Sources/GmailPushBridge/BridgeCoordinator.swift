@@ -126,6 +126,15 @@ final class BridgeCoordinator: ObservableObject {
         let email = settings.gmailAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         let existingTokens = email.isEmpty ? nil : KeychainStore.loadOAuthTokens(for: email)
 
+        if let existingTokens,
+           let existingSecret = existingTokens.clientSecret?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !existingSecret.isEmpty {
+            let clientId = existingTokens.clientId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? settings.oauthClientId
+                : existingTokens.clientId
+            try? KeychainStore.saveOAuthClientSecret(existingSecret, forClientId: clientId)
+        }
+
         isWaitingForMail = false
         isPausedForLowPowerMode = false
         imapClient?.stop()
@@ -134,7 +143,7 @@ final class BridgeCoordinator: ObservableObject {
             KeychainStore.deleteOAuthTokens(for: email)
         }
         settings.objectWillChange.send()
-        appendLog("Removed stored OAuth tokens from Keychain.")
+        appendLog("Removed stored OAuth tokens from Keychain (kept Client ID & Secret).")
 
         if let tokens = existingTokens {
             let tokenToRevoke = tokens.refreshToken.isEmpty ? tokens.accessToken : tokens.refreshToken
@@ -165,7 +174,6 @@ final class BridgeCoordinator: ObservableObject {
             return
         }
 
-        let credentialMode: IMAPCredentialMode
         switch settings.authMethod {
         case .oauth2:
             guard settings.hasOAuthTokens else {
@@ -173,17 +181,13 @@ final class BridgeCoordinator: ObservableObject {
                 appendLog("Click 'Sign in with Google' to authorize IMAP access.")
                 return
             }
-            credentialMode = .xoauth2 {
-                try await GoogleOAuthManager.shared.validAccessToken(for: email)
-            }
 
         case .appPassword:
-            guard let appPassword = settings.sanitizedAppPassword() else {
+            guard settings.hasAppPassword else {
                 connectionState = .disconnected
                 appendLog("Cannot start: 16-character App Password missing.")
                 return
             }
-            credentialMode = .appPassword(appPassword)
         }
 
         isPaused = false
@@ -198,6 +202,22 @@ final class BridgeCoordinator: ObservableObject {
         if settings.autoDisconnectWhenMailClosed && !AppleMailBridge.isMailRunning() {
             enterMailClosedStandby(logMessage: "Waiting for Apple Mail to launch (auto-disconnect when Mail is closed is enabled).")
             return
+        }
+
+        let credentialMode: IMAPCredentialMode
+        switch settings.authMethod {
+        case .oauth2:
+            credentialMode = .xoauth2 {
+                try await GoogleOAuthManager.shared.validAccessToken(for: email)
+            }
+
+        case .appPassword:
+            guard let appPassword = settings.sanitizedAppPassword() else {
+                connectionState = .disconnected
+                appendLog("Cannot start: 16-character App Password missing or Keychain access denied.")
+                return
+            }
+            credentialMode = .appPassword(appPassword)
         }
 
         isWaitingForMail = false

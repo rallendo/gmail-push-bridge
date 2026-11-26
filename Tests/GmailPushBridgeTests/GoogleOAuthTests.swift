@@ -96,6 +96,7 @@ final class GoogleOAuthTests: XCTestCase {
     func testGoogleOAuthErrorDescriptions() {
         let errors: [GoogleOAuthError] = [
             .missingClientId,
+            .missingClientSecret,
             .listenerFailed("port in use"),
             .invalidCallback("missing code"),
             .stateMismatch,
@@ -107,6 +108,82 @@ final class GoogleOAuthTests: XCTestCase {
         for err in errors {
             XCTAssertNotNil(err.errorDescription)
             XCTAssertFalse(err.errorDescription?.isEmpty ?? true)
+        }
+    }
+
+    func testOAuthClientSecretKeyNormalization() {
+        XCTAssertEqual(
+            KeychainStore.oauthClientSecretKey(forClientId: "  ABC123.Apps.GoogleUserContent.Com \n"),
+            "oauth_client_secret:abc123.apps.googleusercontent.com"
+        )
+        XCTAssertNil(KeychainStore.oauthClientSecretKey(forClientId: ""))
+        XCTAssertNil(KeychainStore.oauthClientSecretKey(forClientId: "   \t\n "))
+    }
+
+    func testResolveClientSecretFallbackAndTrimming() {
+        XCTAssertEqual(
+            GoogleOAuthManager.resolveClientSecret(explicit: "  explicit-secret \n", stored: "stored-secret"),
+            "explicit-secret"
+        )
+        XCTAssertEqual(
+            GoogleOAuthManager.resolveClientSecret(explicit: "   ", stored: " stored-secret "),
+            "stored-secret"
+        )
+        XCTAssertEqual(
+            GoogleOAuthManager.resolveClientSecret(explicit: nil, stored: "\tstored-secret\n"),
+            "stored-secret"
+        )
+        XCTAssertNil(GoogleOAuthManager.resolveClientSecret(explicit: nil, stored: nil))
+        XCTAssertNil(GoogleOAuthManager.resolveClientSecret(explicit: "  ", stored: "\n"))
+    }
+
+    func testResolveClientSecretDoesNotEvaluateStoredAutoclosureWhenExplicitIsPresent() {
+        var evaluatedStored = false
+        func expensiveLookup() -> String? {
+            evaluatedStored = true
+            return "stored-secret"
+        }
+
+        let resolved = GoogleOAuthManager.resolveClientSecret(
+            explicit: "explicit-secret",
+            stored: expensiveLookup()
+        )
+        XCTAssertEqual(resolved, "explicit-secret")
+        XCTAssertFalse(evaluatedStored)
+    }
+
+    func testSignInWithBrowserValidatesClientIdAndClientSecretBeforeLaunching() async {
+        do {
+            _ = try await GoogleOAuthManager.shared.signInWithBrowser(
+                clientId: "   ",
+                clientSecret: "some-secret",
+                loginHintEmail: nil
+            )
+            XCTFail("Expected missingClientId error")
+        } catch let error as GoogleOAuthError {
+            guard case .missingClientId = error else {
+                XCTFail("Expected missingClientId, got \(error)")
+                return
+            }
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        let nonexistentClientId = "nonexistent-\(UUID().uuidString).apps.googleusercontent.com"
+        do {
+            _ = try await GoogleOAuthManager.shared.signInWithBrowser(
+                clientId: nonexistentClientId,
+                clientSecret: "  \n ",
+                loginHintEmail: nil
+            )
+            XCTFail("Expected missingClientSecret error")
+        } catch let error as GoogleOAuthError {
+            guard case .missingClientSecret = error else {
+                XCTFail("Expected missingClientSecret, got \(error)")
+                return
+            }
+        } catch {
+            XCTFail("Unexpected error: \(error)")
         }
     }
 }

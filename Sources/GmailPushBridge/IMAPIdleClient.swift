@@ -570,7 +570,7 @@ final class IMAPIdleClient: @unchecked Sendable {
 
         case .xoauth2(let tokenProvider):
             step = .preparingOAuth
-            startWatchdog(seconds: 20, description: "OAuth2 token refresh & XOAUTH2 login")
+            startWatchdog(seconds: 90, description: "OAuth2 token refresh & XOAUTH2 login")
             Task { [weak self] in
                 guard let self else { return }
                 do {
